@@ -11,11 +11,13 @@ grant usage on schema cdc to authenticated;
 
 create table cdc.subscription (
 	-- Tracks which users are subscribed to each table
-	id bigint generated always as identity,
+	id bigint not null generated always as identity,
 	user_id uuid not null references auth.users(id),
 	entity regclass not null,
-	filters jsonb
+	filters jsonb,
+    constraint pk_subscription primary key (id)
 );
+--alter table cdc.subscription replica identity default
 grant all on cdc.subscription to postgres;
 grant select on cdc.subscription to authenticated;
 
@@ -59,43 +61,44 @@ as $$
 $$;
 
 
-
-
 create or replace function  cdc.rls(dat jsonb)
 returns jsonb
 language plpgsql
-stable
+volatile -- required for prepared statements
 as $$
 /*
-	Append a "visible_to" key containing an array of subscribed user_id uuids to each change
+	Append keys describing user visibility to each change
 
-*
+    "security": {
+        "is_rls_enabled": true,
+        "visible_to": ["296d893b-3031-4008-99cb-dc01cce74586"]
+    }
 
-Example *dat*:
-{
-    "change": [
-        {
-            "kind": "insert",
-            "table": "notes",
-            "schema": "public",
-            "columnnames": [
-                "id",
-                "user_id",
-                "body"
-            ],
-            "columntypes": [
-                "bigint",
-                "uuid",
-                "text"
-            ],
-            "columnvalues": [
-                3,
-                "296d893b-3031-4008-99cb-dc01cce74586",
-                "water the plants"
-            ]
-        }
-    ]
-}
+    Example *dat*:
+    {
+        "change": [
+            {
+                "kind": "insert",
+                "table": "notes",
+                "schema": "public",
+                "columnnames": [
+                    "id",
+                    "user_id",
+                    "body"
+                ],
+                "columntypes": [
+                    "bigint",
+                    "uuid",
+                    "text"
+                ],
+                "columnvalues": [
+                    3,
+                    "296d893b-3031-4008-99cb-dc01cce74586",
+                    "water the plants"
+                ]
+            }
+        ]
+    }
 */
 declare
 	entity_ regclass;
@@ -114,6 +117,8 @@ declare
 
     prev_role text = current_setting('role');
     prev_search_path text = current_setting('search_path');
+
+    plan_exists bool;
 
 begin
     -- Without nulling out search path, casting a table prefixed with a schema that is
@@ -135,7 +140,7 @@ begin
 
         -- Check if RLS is enabled for the table
         is_rls_enabled = cdc.is_rls_enabled(entity_);
-    
+
         -- If RLS is enabled for the table, check each subscribed user to see if they should see the change
         if is_rls_enabled then
 		
@@ -147,18 +152,16 @@ begin
                 select count(1) > 0 from public.post where id='2'
             */
             select
-                (
-                    '
-                    with imp as (
-                        select cdc.impersonate(%L)
-                    )
-                    select
-                        count(*) > 0
-                    from
-                        ' || entity_ || '
-                    where 
-                        ' || string_agg(quote_ident(col_name) || '=' || quote_literal(col_val), ' and ')
+                '
+                with imp as (
+                    select cdc.impersonate(%L)
                 )
+                select
+                    count(*) > 0
+                from
+                    ' || entity_ || '
+                where
+                    ' || string_agg(quote_ident(col_name) || '=' || quote_literal(col_val), ' and ')
             from
                 jsonb_array_elements_text(change -> 'columnnames') with ordinality col_n(col_name, col_ix),
                 lateral jsonb_array_elements_text(change -> 'columnvalues') with ordinality col_v(col_val, val_ix),
