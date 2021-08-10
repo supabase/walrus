@@ -24,36 +24,15 @@
 	Convenience functions to keep the central business logic clear
 */
 
-create schema cdc;
-
-create or replace function cdc.get_primary_key_column_names(entity regclass)
-returns text[]
-as $$
+-- WAL2JSON Settings
+--UPDATE pg_settings SET setting = true WHERE name = 'include-xids';
 /*
-	Purpose:
-		Collect an array of the primary key column names for a table
-	
-	Usage:
-		Usage: select cdc.get_primary_key_column_names('public.note')
+set include_timestamp TO true;
+set include-origin to true;
+set include-origin to true;
+set write-in-chunks to true;
 */
-	select
-		array_agg(c.column_name::text)
-	from
-		pg_class
-		inner join pg_namespace
-			on pg_class.relnamespace = pg_namespace.oid
-		inner join information_schema.key_column_usage as c
-			on pg_class.relname = c.table_name
-			and pg_namespace.nspname = c.table_schema
-		left join information_schema.table_constraints AS t	
-			on t.constraint_name = c.constraint_name
-	where
-		pg_class.oid = entity::regclass
-		and t.constraint_type = 'PRIMARY KEY'
-	limit
-		1
-$$ language sql;
-
+create schema cdc;
 -----------------------
 -- Replication Setup --
 -----------------------
@@ -67,7 +46,8 @@ create table cdc.subscription (
 	-- Tracks which users are subscribed to each table
 	id bigint generated always as identity,
 	user_id uuid not null references auth.users(id),
-	entity regclass not null
+	entity regclass not null,
+	filters jsonb
 );
 grant all on cdc.subscription to postgres;
 
@@ -133,7 +113,7 @@ grant all on cdc.subscription to postgres;
 
 
 
-create or replace function  cdc.change_append_visible_to(dat jsonb)
+create or replace function  cdc.rls(dat jsonb)
 returns jsonb
 language plpgsql
 as $$
@@ -141,10 +121,7 @@ as $$
 	Append a "visible_to" key containing an array of subscribed user_id uuids to each change
 */
 declare
-	-- schema name
-	entity_schema text;
 	-- table/view name
-	entity_name text;
 	entity_ regclass;
 	pkey_cols text[];
 	
@@ -159,22 +136,29 @@ declare
 	user_has_access bool;
 	users_have_access uuid[];
 	prev_role text;
-	-- insert, update, delete
-	operation text;
+    search_path text = current_setting('search_path');
 begin
+    -- Without nulling out search path, casting a table prefixed with a schema that is
+    -- contained in the search path will cause the schema to be omitted.
+    -- e.g. 'public.post'::reglcass:text -> 'post' (vs 'public.post')
+    perform set_config('search_path', '', true);
+
 	-- For each change in the replication data
 	for change_row in select * from jsonb_array_elements(dat -> 'change')
 	loop
-		entity_schema = change_row ->> 'schema';
-		entity_name = change_row ->> 'table';
-		entity_ = (quote_ident(entity_schema) || '.' || quote_ident(entity_name))::regclass;
-		pkey_cols = cdc.get_primary_key_column_names(entity_);
+		entity_ = (
+            quote_ident(change_row ->> 'schema')
+            || '.'
+            || quote_ident(change_row ->> 'table')
+        )::regclass;
+
+        -- raise exception 'entity %, %', entity_, current_setting('search_path');
 		users_have_access = '{}';
 		
 		-- Zip column names and values for the primary key cols into a sql query to check if
 		-- each subscribed user has access
 		-- Sample output: 
-		--		select count(*) > 0 from note where id='2'
+		--		select count(*) > 0 from public.post where id='2'
 		select
 			(
 				'select count(*) > 0 from '|| entity_::text 
@@ -183,24 +167,29 @@ begin
 		from
 			jsonb_array_elements_text(change_row -> 'columnnames') with ordinality col_n(col_name, col_ix),
 			lateral jsonb_array_elements_text(change_row -> 'columnvalues') with ordinality col_v(col_val, val_ix),
-			lateral unnest(pkey_cols) pkeys(pkey_col)
+			lateral jsonb_array_elements_text(change_row -> 'pk' -> 'pknames') pkeys(pkey_col)
 		where
 			col_ix = val_ix
 			and col_name::text = pkey_col
 		group by
 			entity_
-		into query_has_access;
+		into
+            query_has_access;
+    
+        --raise exception 'entity %, %', entity_, query_has_access;
 			
 		-- For each subscribed user
 		for user_id in select sub.user_id from cdc.subscription sub where sub.entity = entity_
 		loop
-			
 			-- Set authenticated as the user we're checking
-			perform	set_config('role', 'authenticated', true);
-			perform set_config('request.jwt.claim.sub', user_id::text, true);
+			perform	(
+                set_config('role', 'authenticated', true),
+                set_config('request.jwt.claim.sub', user_id::text, true)
+            );
+
 			-- Execute that access query as the user
-			
-			execute query_has_access into user_has_access;
+            -- TODO: handle exceptions (permissions) here
+            execute query_has_access into user_has_access;
 			
 			if user_has_access then
 				users_have_access = users_have_access || user_id;
@@ -208,16 +197,25 @@ begin
 			
 		end loop;
 		
-		perform set_config('role', null, true);
-		perform set_config('request.jwt.claim.sub', null, true);
+		perform (
+            set_config('role', null, true),
+            set_config('request.jwt.claim.sub', null, true)
+        );
 			
 		-- Cast the array of subscribed users to a jsonb array and add it to the change_row
-		change_row = change_row || (select jsonb_build_object('visible_to', jsonb_agg(v)) from unnest(users_have_access) x(v));
+		change_row = change_row || (
+            select jsonb_build_object(
+                'visible_to',
+                coalesce(jsonb_agg(v), '[]')
+            ) from unnest(users_have_access) x(v)
+        );
 		
 		-- Add the updated row to the result set
 		res_agg = res_agg || change_row;
-		
 	end loop;
+
+    -- Restore previous configuration
+    perform set_config('search_path', search_path, true);
 	
 	return jsonb_build_object(
 		'change',

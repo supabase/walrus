@@ -100,6 +100,17 @@ def sess(engine):
         select pg_drop_replication_slot('rls_poc');
     """)
 
-    conn.execute("drop schema public cascade;")
-    conn.execute("create schema public;")
+    conn.execute("""
+    drop schema public cascade;
+    create schema public;
+    """)
+    conn.execute("""
+    grant usage on schema public to postgres, anon, authenticated, service_role;
+    alter default privileges in schema public grant all on tables to postgres, anon, authenticated, service_role;
+    alter default privileges in schema public grant all on functions to postgres, anon, authenticated, service_role;
+    alter default privileges in schema public grant all on sequences to postgres, anon, authenticated, service_role;
+    truncate table cdc.subscription cascade;
+    truncate table auth.users cascade;
+    """)
+    conn.execute(text("commit"))
     conn.close()
