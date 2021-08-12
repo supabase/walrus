@@ -1,46 +1,4 @@
----------------------------------------
--- Realtime Row Level Security (RLS) --
----------------------------------------
-/*
-	The folowing is a proof of concept showing how row level security
-	rules can be applied to a realtime replicaiton stream.
-	
-	There are sample outputs & tests throghout this document. Read it as
-	a blog post with embedded code.
-	
-	Steps:
-	 - Create a table named public.note
-	 - Create a RLS policy such that each row is visible to exactly 1 user
-	 - Create a new note owned by 1 of 10 users
-	 - View the standard wal2json replication output for the note
-	 - Pass the wal2json replication output through a security function
-	 		to add an array of user_ids representing users who are subscribed
-			to the table & pass the RLS policy to have visibility of the change
-*/
------------------------------------
--- Realtime RLS Helper Utilities --
------------------------------------
-/*
-	Convenience functions to keep the central business logic clear
-*/
-
--- WAL2JSON Settings
---UPDATE pg_settings SET setting = true WHERE name = 'include-xids';
-/*
-set include_timestamp TO true;
-set include-origin to true;
-set include-origin to true;
-set write-in-chunks to true;
-*/
 create schema cdc;
------------------------
--- Replication Setup --
------------------------
-/*
-	- Create a table to track which users are subscribed to each table
-	- Create a replication slot
-	- Create some change to inspect
-*/
 
 create table cdc.subscription (
 	-- Tracks which users are subscribed to each table
@@ -50,67 +8,6 @@ create table cdc.subscription (
 	filters jsonb
 );
 grant all on cdc.subscription to postgres;
-
--- Subscribe all users to the public.note table
---insert into cdc.subscription(user_id, entity) select id, 'public.note' from auth.users;
-
--- Create slot
---select * from pg_create_logical_replication_slot('rls_poc', 'wal2json');
-
--- Create a new public.note to produce some logical replication data
---insert into public.note(user_id, body)
---select id, 'water the plants' from auth.users order by id limit 1;
-
-
-------------
--- Review --
-------------
-/*
-	Look at the standard wal2json contents for the record
-	Note:
-		"peek" lets us review the change without consuming it
-		change "peek" to "get" for consume changes 
-*/
---select lsn, xid, data from pg_logical_slot_peek_changes('rls_poc', NULL, NULL);
-/*
-{
-    "change": [
-        {
-            "kind": "insert",
-            "table": "note",
-            "schema": "public",
-            "columnnames": [
-                "id",
-                "user_id",
-                "body"
-            ],
-            "columntypes": [
-                "bigint",
-                "uuid",
-                "text"
-            ],
-            "columnvalues": [
-                2,
-                "296d893b-3031-4008-99cb-dc01cce74586",
-                "water the plants"
-            ]
-        }
-    ]
-}
-*/
-
-------------------------------------
--- Realtime RLS Security Function --
-------------------------------------
-/*
-	To this point, we have a SQL queryable view that gives us CDC
-	as JSONB, with no RLS.
-	
-	Our goal is to append another jsonb key named "visible_to" to each row in the
-	change data that shows an array of user_id uuids that have access to view
-	the change
-*/
-
 
 
 create or replace function  cdc.rls(dat jsonb)
@@ -137,6 +34,7 @@ declare
 	users_have_access uuid[];
 	prev_role text;
     search_path text = current_setting('search_path');
+    stmt text;
 begin
     -- Without nulling out search path, casting a table prefixed with a schema that is
     -- contained in the search path will cause the schema to be omitted.
@@ -176,20 +74,24 @@ begin
 		into
             query_has_access;
     
-        --raise exception 'entity %, %', entity_, query_has_access;
-			
 		-- For each subscribed user
 		for user_id in select sub.user_id from cdc.subscription sub where sub.entity = entity_
 		loop
 			-- Set authenticated as the user we're checking
-			perform	(
-                set_config('role', 'authenticated', true),
-                set_config('request.jwt.claim.sub', user_id::text, true)
-            );
+            stmt = format(
+                $c$
+                    with impersonate as (
+                        select
+                            set_config('request.jwt.claim.sub', '%s', true),
+                            set_config('role', 'authenticated', true)
+                    )
+                $c$,
+                user_id
+            ) || query_has_access;
 
 			-- Execute that access query as the user
             -- TODO: handle exceptions (permissions) here
-            execute query_has_access into user_has_access;
+            execute stmt into user_has_access;
 			
 			if user_has_access then
 				users_have_access = users_have_access || user_id;
@@ -225,17 +127,7 @@ end;
 $$;
 
 
-------------
--- Output --
-------------
 /*
-	Finally, we pass the wal2json replication stream through
-	our function to check if the update is visible to each subscribed user
-	and append that data to the update
-select
-	cdc.change_append_visible_to(data::jsonb)
-from
-	pg_logical_slot_peek_changes('rls_poc', NULL, NULL);
 {
     "change": [
         {
