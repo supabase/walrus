@@ -42,7 +42,7 @@ alter table note enable row level security;
 def setup_subscriptions(sess):
     sess.execute(text("""
 insert into cdc.subscription(user_id, entity)
-select id, 'public.note' from auth.users;
+select id, 'public.note' from auth.users limit 2;
     """))
     sess.commit()
     # Flush any wal we created
@@ -91,4 +91,4 @@ select id, 'take out the trash' from auth.users order by id limit 1;
     assert 'change' in data
     assert data['change'][0]['table'] == 'note'
     assert 'visible_to' in data['change'][0]
-    assert len(data["change"][0]["visible_to"]) == 1
+    assert len(data["change"][0]["visible_to"]) == 2
