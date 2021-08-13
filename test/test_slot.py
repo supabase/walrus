@@ -26,6 +26,14 @@ create table public.note(
 );
 create index ix_note_user_id on public.note (user_id);
 
+    """))
+    sess.commit()
+    # Flush any wal we created
+    data = sess.execute(SLOT).all()
+    sess.commit()
+
+def setup_note_rls(sess):
+    sess.execute(text("""
 -- Access policy so only the owning user_id may see each row
 create policy rls_note_select
 on public.note
@@ -39,6 +47,7 @@ alter table note enable row level security;
     data = sess.execute(SLOT).all()
     sess.commit()
 
+
 def setup_subscriptions(sess):
     sess.execute(text("""
 insert into cdc.subscription(user_id, entity)
@@ -51,8 +60,8 @@ select id, 'public.note' from auth.users limit 2;
 
 
 def test_read_wal(sess):
-    setup_users(sess);
-    setup_note(sess);
+    setup_users(sess)
+    setup_note(sess)
     sess.execute("""
 insert into public.note(user_id, body)
 select id, 'take out the trash' from auth.users order by id limit 1;
@@ -78,10 +87,11 @@ select id, 'take out the trash' from auth.users order by id limit 1;
     assert 'pk' in data["change"][0]
 
 
-def test_read_wal_w_visible_to(sess):
-    setup_users(sess);
-    setup_note(sess);
-    setup_subscriptions(sess);
+def test_read_wal_w_visible_to_has_rls(sess):
+    setup_users(sess)
+    setup_note(sess)
+    setup_note_rls(sess)
+    setup_subscriptions(sess)
     sess.execute("""
 insert into public.note(user_id, body)
 select id, 'take out the trash' from auth.users order by id limit 1;
@@ -90,5 +100,39 @@ select id, 'take out the trash' from auth.users order by id limit 1;
     data = sess.execute(RLS_SLOT).scalar()
     assert 'change' in data
     assert data['change'][0]['table'] == 'note'
-    assert 'visible_to' in data['change'][0]
-    assert len(data["change"][0]["visible_to"]) == 2
+    assert 'security' in data['change'][0]
+
+    security = data["change"][0]["security"]
+    assert security["is_rls_enabled"]
+    # 2 permitted users
+    assert len(security["visible_to"]) == 2
+    # user_ids are different
+    assert len(set(security["visible_to"])) == 2
+    assert len(security["visible_to"][0]) > 10
+
+def test_read_wal_w_visible_to_no_rls(sess):
+    setup_users(sess)
+    setup_note(sess)
+    setup_subscriptions(sess)
+    sess.execute("""
+insert into public.note(user_id, body)
+select id, 'take out the trash' from auth.users order by id limit 1;
+    """)
+    sess.commit()
+    data = sess.execute(RLS_SLOT).scalar()
+    assert 'change' in data
+    assert data['change'][0]['table'] == 'note'
+    assert 'security' in data['change'][0]
+
+    security = data["change"][0]["security"]
+    assert not security["is_rls_enabled"]
+    # visible_to is empty when no rls enabled
+    assert len(security["visible_to"]) == 0
+
+
+
+
+
+
+
+
