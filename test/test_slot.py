@@ -97,7 +97,7 @@ insert into public.note(user_id, body)
 select id, 'take out the trash' from auth.users order by id limit 1;
     """)
     sess.commit()
-    import pdb; pdb.set_trace()
+    #import pdb; pdb.set_trace()
     data = sess.execute(RLS_SLOT).scalar()
     assert 'change' in data
     assert data['change'][0]['table'] == 'note'

@@ -163,7 +163,11 @@ declare
 
     pkey_cols text[];
     pkey_types text[];
+    pkey_vals text[];
     prep_stmt_sql text;
+    prep_stmt_executor_sql text;
+    prep_stmt_executor_sql_template text;
+    prep_stmt_params text[];
     -- might make this dynamic
     prep_stmt_name text = 'xyz';
 
@@ -200,8 +204,21 @@ begin
 
             select array_agg(col_name) from jsonb_array_elements_text(change -> 'pk' -> 'pknames') x(col_name) into pkey_cols;
             select array_agg(col_name) from jsonb_array_elements_text(change -> 'pk' -> 'pktypes') x(col_name) into pkey_types;
-            prep_stmt_name = lower(schema_name) || '_' || lower(table_name) || '_wal_rls';
+            select
+                array_agg(col_val)
+            from
+                jsonb_array_elements_text(change -> 'columnnames') with ordinality col_n(col_name, col_ix),
+                lateral jsonb_array_elements_text(change -> 'columnvalues') with ordinality col_v(col_val, val_ix),
+                lateral jsonb_array_elements_text(change -> 'pk' -> 'pknames') pkeys(pkey_col)
+            where
+                col_ix = val_ix
+                and col_name::text = pkey_col
+            group by
+                entity_
+            into pkey_vals;
 
+            -- Setup a prepared statement for this record
+            prep_stmt_name = lower(schema_name) || '_' || lower(table_name) || '_wal_rls';
             -- Collect sql string for prepared statment
             prep_stmt_sql = cdc.build_prepared_statement_sql(prep_stmt_name, entity_, pkey_cols, pkey_types);
             -- Create the prepared statement
@@ -212,9 +229,10 @@ begin
             for user_id in select sub.user_id from cdc.subscription sub where sub.entity = entity_
             loop
                 -- TODO: handle exceptions (permissions) here
-                -- TODO: handle primary keys with more than 1 column
-                -- TODO: unstub primary key value
-                execute format('execute %I(''%s'', ''%s'');', prep_stmt_name, user_id, '1') into user_has_access;
+                prep_stmt_executor_sql_template = 'execute %I(''%s'', ' || string_agg('''%s''', ', ') || ')' from generate_series(1,array_length(pkey_vals, 1) );
+                -- Assemble all arguments into an array to pass into the template
+                prep_stmt_params = '{}'::text[] || prep_stmt_name || user_id::text || pkey_vals;
+                execute format(prep_stmt_executor_sql_template, variadic prep_stmt_params) into user_has_access;
 
                 if user_has_access then
                     visible_to_user_ids = visible_to_user_ids || user_id;
