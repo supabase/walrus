@@ -61,6 +61,45 @@ as $$
 $$;
 
 
+create or replace function cdc.build_prepared_statement_sql(
+    prepared_statement_name text,
+	entity regclass,
+	-- primary key column names
+	-- this could be looked up internaly
+	pkey_cols text[],
+	pkey_types text[]
+)
+returns text
+language sql
+/*
+Example
+    select cdc.build_prepared_statment_sql('public.notes', '{"id"}'::text[], '{"bigint"}'::text[])
+*/
+as $$
+	select
+'prepare ' || prepared_statement_name ||'(uuid, ' || string_agg('text', ', ') || ') as
+with imp as (
+	select cdc.impersonate($1)
+)
+select
+	count(*) > 0
+from
+	' || entity || '
+where
+	' || string_agg(quote_ident(col) || '=$' || (1+col_ix)::text || '::' || type_ , ' and ') || ';'
+	from
+		unnest(pkey_cols) with ordinality pkc(col, col_ix),
+		lateral unnest(pkey_types) with ordinality pkt(type_, type_ix)
+	where
+		col_ix = type_ix
+	group by
+		entity
+$$;
+
+
+create type cdc.kind as enum('insert', 'update', 'delete');
+
+
 create or replace function  cdc.rls(dat jsonb)
 returns jsonb
 language plpgsql
@@ -101,9 +140,11 @@ as $$
     }
 */
 declare
+	table_name text;
+	schema_name text;
 	entity_ regclass;
     change jsonb;
-
+    kind cdc.kind;
     is_rls_enabled bool;
 	
 	-- UUIDs of subscribed users who may view the change
@@ -120,6 +161,12 @@ declare
 
     plan_exists bool;
 
+    pkey_cols text[];
+    pkey_types text[];
+    prep_stmt_sql text;
+    -- might make this dynamic
+    prep_stmt_name text = 'xyz';
+
 begin
     -- Without nulling out search path, casting a table prefixed with a schema that is
     -- contained in the search path will cause the schema to be omitted.
@@ -133,7 +180,13 @@ begin
 	loop
 
         -- Regclass of the table e.g. public.notes
-		entity_ = (quote_ident(change ->> 'schema')|| '.'|| quote_ident(change ->> 'table'))::regclass;
+        schema_name = (change ->> 'schema');
+        table_name = (change ->> 'table');
+		entity_ = (quote_ident(schema_name)|| '.' || quote_ident(table_name))::regclass;
+
+        -- insert, update, delete
+        -- TODO: alter behavior on deletes
+        kind = (change ->> 'kind')::cdc.kind;
 
         -- Array tracking which user_ids have been approved to view the change
 		visible_to_user_ids = '{}';
@@ -143,49 +196,35 @@ begin
 
         -- If RLS is enabled for the table, check each subscribed user to see if they should see the change
         if is_rls_enabled then
-		
-            /* 
-            Create a SQL string, embedding the fixed components like table and column names
-            that can not be part of a prepared statement
 
-            Example *query_has_access*
-                select count(1) > 0 from public.post where id='2'
-            */
-            select
-                '
-                with imp as (
-                    select cdc.impersonate(%L)
-                )
-                select
-                    count(*) > 0
-                from
-                    ' || entity_ || '
-                where
-                    ' || string_agg(quote_ident(col_name) || '=' || quote_literal(col_val), ' and ')
-            from
-                jsonb_array_elements_text(change -> 'columnnames') with ordinality col_n(col_name, col_ix),
-                lateral jsonb_array_elements_text(change -> 'columnvalues') with ordinality col_v(col_val, val_ix),
-                lateral jsonb_array_elements_text(change -> 'pk' -> 'pknames') pkeys(pkey_col)
-            where
-                col_ix = val_ix
-                and col_name::text = pkey_col
-            group by
-                entity_
-            into
-                query_has_access;
-        
+
+            select array_agg(col_name) from jsonb_array_elements_text(change -> 'pk' -> 'pknames') x(col_name) into pkey_cols;
+            select array_agg(col_name) from jsonb_array_elements_text(change -> 'pk' -> 'pktypes') x(col_name) into pkey_types;
+            prep_stmt_name = lower(schema_name) || '_' || lower(table_name) || '_wal_rls';
+
+            -- Collect sql string for prepared statment
+            prep_stmt_sql = cdc.build_prepared_statement_sql(prep_stmt_name, entity_, pkey_cols, pkey_types);
+            -- Create the prepared statement
+            execute prep_stmt_sql;
+
+
             -- For each subscribed user
             for user_id in select sub.user_id from cdc.subscription sub where sub.entity = entity_
             loop
                 -- TODO: handle exceptions (permissions) here
-                -- Set authenticated as the user we're checking
-                execute format(query_has_access, user_id, entity_) into user_has_access;
+                -- TODO: handle primary keys with more than 1 column
+                -- TODO: unstub primary key value
+                execute format('execute %I(''%s'', ''%s'');', prep_stmt_name, user_id, '1') into user_has_access;
 
                 if user_has_access then
                     visible_to_user_ids = visible_to_user_ids || user_id;
                 end if;
                 
             end loop;
+
+            -- Delete the prepared statemetn
+            execute format('deallocate %I', prep_stmt_name);
+
         end if;
 		
 			
