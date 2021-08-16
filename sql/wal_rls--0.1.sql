@@ -23,24 +23,13 @@ grant select on cdc.subscription to authenticated;
 
 
 create or replace function  cdc.is_rls_enabled(entity regclass)
-returns boolean
-stable
-language sql
+    returns boolean
+    stable
+    language sql
 as $$
-    select
-        relrowsecurity
-    from
-        pg_class
-    where
-        oid = entity;
-$$;
-
-
-create or replace function  cdc.is_rls_enabled(entity regclass)
-returns boolean
-stable
-language sql
-as $$
+/*
+Is Row Level Security enabled for the entity
+*/
     select
         relrowsecurity
     from
@@ -51,10 +40,14 @@ $$;
 
 
 create or replace function cdc.impersonate(user_id uuid)
-returns void
-volatile
-language sql
+    returns void
+    volatile
+    language sql
 as $$
+/*
+Updates the current transaction's config so queries can by made as a user
+authenticated as *user_id* 
+*/
     select
         set_config('request.jwt.claim.sub', user_id::text, true),
         set_config('role', 'authenticated', true)
@@ -69,13 +62,17 @@ create or replace function cdc.build_prepared_statement_sql(
 	pkey_cols text[],
 	pkey_types text[]
 )
-returns text
-language sql
+    returns text
+    language sql
+as $$
 /*
+Builds a sql string that, if executed, creates a prepared statement to impersonatea user
+and tests if that user has access to a data row described by *entity* and an array of
+it'd primray key values.
+
 Example
     select cdc.build_prepared_statment_sql('public.notes', '{"id"}'::text[], '{"bigint"}'::text[])
 */
-as $$
 	select
 'prepare ' || prepared_statement_name ||'(uuid, ' || string_agg('text', ', ') || ') as
 with imp as (
@@ -94,6 +91,57 @@ where
 		col_ix = type_ix
 	group by
 		entity
+$$;
+
+
+create or replace function cdc.selectable_columns(
+    entity regclass,
+    role_ text default 'authenticated'
+)
+returns text[]
+language sql
+stable
+as $$
+/*
+Returns a text array containing the column names in *entity* that *role_* has select access to
+*/
+    select 
+        array_agg(rcg.column_name order by c.ordinal_position)
+    from
+        information_schema.role_column_grants rcg
+        inner join information_schema.columns c
+            on rcg.table_schema = c.table_schema
+            and rcg.table_name = c.table_name
+            and rcg.column_name = c.column_name
+    where
+        -- INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
+        rcg.privilege_type = 'SELECT'
+        and rcg.grantee = role_ 
+        and rcg.table_schema = (parse_ident(entity::text))[1]
+        and rcg.table_name = (parse_ident(entity::text))[2];
+$$;
+
+
+create or replace function cdc.cast_to_array_text(arr jsonb)
+    returns text[]
+    language 'sql'
+    stable
+as $$
+/*
+Cast an jsonb array of text to a native postgres array of text
+
+Example:
+    select cdc.cast_to_array_text('{"hello", "world"}'::jsonb)
+*/
+    select
+        array_agg(xyz.v)
+    from
+        jsonb_array_elements_text(
+            case
+                when jsonb_typeof(arr) = 'array' then arr
+                else '[]'::jsonb
+            end
+        ) xyz(v)
 $$;
 
 
@@ -202,8 +250,9 @@ begin
         if is_rls_enabled then
 
 
-            select array_agg(col_name) from jsonb_array_elements_text(change -> 'pk' -> 'pknames') x(col_name) into pkey_cols;
-            select array_agg(col_name) from jsonb_array_elements_text(change -> 'pk' -> 'pktypes') x(col_name) into pkey_types;
+            pkey_cols = cdc.cast_to_array_text(change -> 'pk' -> 'pknames');
+            pkey_types = cdc.cast_to_array_text(change -> 'pk' -> 'pktypes');
+
             select
                 array_agg(col_val)
             from
@@ -256,6 +305,8 @@ begin
                         is_rls_enabled,
                         'visible_to',
                         coalesce(jsonb_agg(v), '[]')
+  --                      'visisble_columns',
+   --                     (select jsonb_agg())
                     )
                 )
             from
