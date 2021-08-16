@@ -133,7 +133,10 @@ as $$
 Returns a text array containing the column names in *entity* that *role_* has select access to
 */
     select 
-        array_agg(rcg.column_name order by c.ordinal_position)
+        coalesce(
+            array_agg(rcg.column_name order by c.ordinal_position),
+            '{}'::text[]
+        )
     from
         information_schema.role_column_grants rcg
         inner join information_schema.columns c
