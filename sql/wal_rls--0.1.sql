@@ -94,6 +94,33 @@ where
 $$;
 
 
+
+create or replace function cdc.get_schema_name(entity regclass)
+returns text
+immutable
+language sql
+as $$
+    SELECT nspname::text
+    FROM pg_catalog.pg_class AS c
+    JOIN pg_catalog.pg_namespace AS ns
+      ON c.relnamespace = ns.oid
+    WHERE c.oid = entity;
+$$;
+
+
+create or replace function cdc.get_table_name(entity regclass)
+returns text
+immutable
+language sql
+as $$
+    SELECT c.relname::text
+    FROM pg_catalog.pg_class AS c
+    JOIN pg_catalog.pg_namespace AS ns
+      ON c.relnamespace = ns.oid
+    WHERE c.oid = entity;
+$$;
+
+
 create or replace function cdc.selectable_columns(
     entity regclass,
     role_ text default 'authenticated'
@@ -117,8 +144,8 @@ Returns a text array containing the column names in *entity* that *role_* has se
         -- INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
         rcg.privilege_type = 'SELECT'
         and rcg.grantee = role_ 
-        and rcg.table_schema = (parse_ident(entity::text))[1]
-        and rcg.table_name = (parse_ident(entity::text))[2];
+        and rcg.table_schema = cdc.get_schema_name(entity)
+        and rcg.table_name = cdc.get_table_name(entity);
 $$;
 
 
@@ -144,48 +171,67 @@ Example:
         ) xyz(v)
 $$;
 
+create or replace function cdc.cast_to_jsonb_array_text(arr text[])
+    returns jsonb
+    language 'sql'
+    stable
+as $$
+/*
+Cast an jsonb array of text to a native postgres array of text
+
+Example:
+    select cdc.cast_to_jsonb_array_text('{"hello", "world"}'::text[])
+*/
+    select
+        jsonb_agg(xyz.v)
+    from
+        unnest(arr) xyz(v);
+$$;
+
+
 
 create type cdc.kind as enum('insert', 'update', 'delete');
 
 
 create or replace function  cdc.rls(dat jsonb)
-returns jsonb
-language plpgsql
-volatile -- required for prepared statements
+    returns jsonb
+    language plpgsql
+    volatile
 as $$
 /*
-	Append keys describing user visibility to each change
+Append keys describing user visibility to each change
 
-    "security": {
-        "is_rls_enabled": true,
-        "visible_to": ["296d893b-3031-4008-99cb-dc01cce74586"]
-    }
+"security": {
+    "is_rls_enabled": true,
+    "visible_to": ["296d893b-3031-4008-99cb-dc01cce74586"],
+    "visible_columns": ["id", "body"]
+}
 
-    Example *dat*:
-    {
-        "change": [
-            {
-                "kind": "insert",
-                "table": "notes",
-                "schema": "public",
-                "columnnames": [
-                    "id",
-                    "user_id",
-                    "body"
-                ],
-                "columntypes": [
-                    "bigint",
-                    "uuid",
-                    "text"
-                ],
-                "columnvalues": [
-                    3,
-                    "296d893b-3031-4008-99cb-dc01cce74586",
-                    "water the plants"
-                ]
-            }
-        ]
-    }
+Example *dat*:
+{
+    "change": [
+        {
+            "kind": "insert",
+            "table": "notes",
+            "schema": "public",
+            "columnnames": [
+                "id",
+                "user_id",
+                "body"
+            ],
+            "columntypes": [
+                "bigint",
+                "uuid",
+                "text"
+            ],
+            "columnvalues": [
+                3,
+                "296d893b-3031-4008-99cb-dc01cce74586",
+                "water the plants"
+            ]
+        }
+    ]
+}
 */
 declare
 	table_name text;
@@ -196,7 +242,7 @@ declare
     is_rls_enabled bool;
 	
 	-- UUIDs of subscribed users who may view the change
-	visible_to_user_ids uuid[];
+	visible_to_user_ids text[];
 	
 	-- Internal state vars
 	res_agg jsonb[] = '{}';
@@ -212,6 +258,7 @@ declare
     pkey_cols text[];
     pkey_types text[];
     pkey_vals text[];
+    selectable_columns text[];
     prep_stmt_sql text;
     prep_stmt_executor_sql text;
     prep_stmt_executor_sql_template text;
@@ -246,24 +293,24 @@ begin
         -- Check if RLS is enabled for the table
         is_rls_enabled = cdc.is_rls_enabled(entity_);
 
+        -- Which columns does the "authenticated" role have permission to select (view)
+        selectable_columns = cdc.selectable_columns(entity_);
+
         -- If RLS is enabled for the table, check each subscribed user to see if they should see the change
         if is_rls_enabled then
-
 
             pkey_cols = cdc.cast_to_array_text(change -> 'pk' -> 'pknames');
             pkey_types = cdc.cast_to_array_text(change -> 'pk' -> 'pktypes');
 
             select
-                array_agg(col_val)
+                array_agg(col_val order by val_ix asc)
             from
-                jsonb_array_elements_text(change -> 'columnnames') with ordinality col_n(col_name, col_ix),
-                lateral jsonb_array_elements_text(change -> 'columnvalues') with ordinality col_v(col_val, val_ix),
-                lateral jsonb_array_elements_text(change -> 'pk' -> 'pknames') pkeys(pkey_col)
+                unnest(pkey_cols) pkeys(pkey_col),
+                lateral jsonb_array_elements_text(change -> 'columnnames') with ordinality col_n(col_name, col_ix),
+                lateral jsonb_array_elements_text(change -> 'columnvalues') with ordinality col_v(col_val, val_ix)
             where
                 col_ix = val_ix
                 and col_name::text = pkey_col
-            group by
-                entity_
             into pkey_vals;
 
             -- Setup a prepared statement for this record
@@ -272,7 +319,6 @@ begin
             prep_stmt_sql = cdc.build_prepared_statement_sql(prep_stmt_name, entity_, pkey_cols, pkey_types);
             -- Create the prepared statement
             execute prep_stmt_sql;
-
 
             -- For each subscribed user
             for user_id in select sub.user_id from cdc.subscription sub where sub.entity = entity_
@@ -284,7 +330,7 @@ begin
                 execute format(prep_stmt_executor_sql_template, variadic prep_stmt_params) into user_has_access;
 
                 if user_has_access then
-                    visible_to_user_ids = visible_to_user_ids || user_id;
+                    visible_to_user_ids = visible_to_user_ids || user_id::text;
                 end if;
                 
             end loop;
@@ -304,13 +350,11 @@ begin
                         'is_rls_enabled',
                         is_rls_enabled,
                         'visible_to',
-                        coalesce(jsonb_agg(v), '[]')
-  --                      'visisble_columns',
-   --                     (select jsonb_agg())
+                        coalesce(cdc.cast_to_jsonb_array_text(visible_to_user_ids), '[]'),
+                        'visible_columns',
+                        cdc.cast_to_jsonb_array_text(selectable_columns)
                     )
                 )
-            from
-                unnest(visible_to_user_ids) x(v)
         );
 		
 		-- Add the updated row to the result set

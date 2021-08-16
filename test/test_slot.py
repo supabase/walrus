@@ -87,30 +87,6 @@ select id, 'take out the trash' from auth.users order by id limit 1;
     assert 'pk' in data["change"][0]
 
 
-def test_read_wal_w_visible_to_has_rls(sess):
-    setup_users(sess)
-    setup_note(sess)
-    setup_note_rls(sess)
-    setup_subscriptions(sess)
-    sess.execute("""
-insert into public.note(user_id, body)
-select id, 'take out the trash' from auth.users order by id limit 1;
-    """)
-    sess.commit()
-    #import pdb; pdb.set_trace()
-    data = sess.execute(RLS_SLOT).scalar()
-    assert 'change' in data
-    assert data['change'][0]['table'] == 'note'
-    assert 'security' in data['change'][0]
-
-    security = data["change"][0]["security"]
-    assert security["is_rls_enabled"]
-    # 2 permitted users
-    assert len(security["visible_to"]) == 2
-    # user_ids are different
-    assert len(set(security["visible_to"])) == 2
-    assert len(security["visible_to"][0]) > 10
-
 def test_read_wal_w_visible_to_no_rls(sess):
     setup_users(sess)
     setup_note(sess)
@@ -129,6 +105,32 @@ select id, 'take out the trash' from auth.users order by id limit 1;
     assert not security["is_rls_enabled"]
     # visible_to is empty when no rls enabled
     assert len(security["visible_to"]) == 0
+    assert len(security["visible_columns"]) == 3
+
+def test_read_wal_w_visible_to_has_rls(sess):
+    setup_users(sess)
+    setup_note(sess)
+    setup_note_rls(sess)
+    setup_subscriptions(sess)
+    sess.execute("""
+insert into public.note(user_id, body)
+select id, 'take out the trash' from auth.users order by id limit 1;
+    """)
+    sess.commit()
+    data = sess.execute(RLS_SLOT).scalar()
+    assert 'change' in data
+    assert data['change'][0]['table'] == 'note'
+    assert 'security' in data['change'][0]
+
+    security = data["change"][0]["security"]
+    assert security["is_rls_enabled"]
+    # 2 permitted users
+    assert len(security["visible_to"]) == 2
+    # user_ids are different
+    assert len(set(security["visible_to"])) == 2
+    assert len(security["visible_to"][0]) > 10
+    assert len(security["visible_columns"]) == 3
+    assert security["visible_columns"] == ["id", "user_id", "body"]
 
 
 
