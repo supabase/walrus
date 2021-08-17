@@ -14,10 +14,11 @@ create table cdc.subscription (
 	id bigint not null generated always as identity,
 	user_id uuid not null references auth.users(id),
 	entity regclass not null,
+    -- Format. Equality only {"col_1": "1", "col_2": 4 }
 	filters jsonb,
-    constraint pk_subscription primary key (id)
+    constraint pk_subscription primary key (id),
+    created_at timestamp not null default timezone('utc', now())
 );
---alter table cdc.subscription replica identity default
 grant all on cdc.subscription to postgres;
 grant select on cdc.subscription to authenticated;
 

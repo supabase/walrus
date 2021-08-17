@@ -2,13 +2,13 @@
 import json
 import os
 import subprocess
-from pathlib import Path
 import time
-from flupy import walk_files
+from pathlib import Path
 from typing import Any
 
 import pytest
 import sqlalchemy
+from flupy import walk_files
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
@@ -47,7 +47,7 @@ def dockerize_database():
                 "3s",
                 "--health-retries",
                 "15",
-                IMAGE_NAME
+                IMAGE_NAME,
             ]
         )
         # Wait for postgres to become healthy
@@ -71,13 +71,12 @@ def dockerize_database():
 def engine(dockerize_database):
     eng = create_engine(f"postgresql://postgres:password@localhost:{PORT}/{DB_NAME}")
 
-    for str_path in walk_files('sql'):
+    for str_path in walk_files("sql"):
         path = Path(str_path)
         contents = path.read_text()
         with eng.connect() as conn:
             conn.execute(text(contents))
             conn.execute(text("commit"))
-
 
     yield eng
     eng.dispose()
@@ -87,7 +86,9 @@ def engine(dockerize_database):
 def sess(engine):
 
     conn = engine.connect()
-    conn.execute(text("select * from pg_create_logical_replication_slot('rls_poc', 'wal2json')"))
+    conn.execute(
+        text("select * from pg_create_logical_replication_slot('rls_poc', 'wal2json')")
+    )
     conn.execute(text("commit"))
     # Bind a session to the top level transaction
     _session = Session(bind=conn)
@@ -97,22 +98,28 @@ def sess(engine):
     _session.close()
 
     # Cleanup between tests
-    conn.execute("""
+    conn.execute(
+        """
         select pg_drop_replication_slot('rls_poc');
-    """)
+    """
+    )
 
-    conn.execute("""
+    conn.execute(
+        """
     drop schema public cascade;
     create schema public;
-    """)
-    conn.execute("""
+    """
+    )
+    conn.execute(
+        """
     grant usage on schema public to postgres, anon, authenticated, service_role;
     alter default privileges in schema public grant all on tables to postgres, anon, authenticated, service_role;
     alter default privileges in schema public grant all on functions to postgres, anon, authenticated, service_role;
     alter default privileges in schema public grant all on sequences to postgres, anon, authenticated, service_role;
     truncate table cdc.subscription cascade;
     truncate table auth.users cascade;
-    """)
+    """
+    )
     conn.execute(text("commit"))
     conn.close()
 
@@ -125,6 +132,7 @@ def pytest_addoption(parser: Any) -> None:
         help="run performance check",
     )
 
+
 def pytest_collection_modifyitems(config: Any, items: Any) -> None:
     if not config.getoption("--run-perf"):
         skip = pytest.mark.skip(reason="performance test. Use --run-perf to run")
@@ -132,4 +140,3 @@ def pytest_collection_modifyitems(config: Any, items: Any) -> None:
             if "performance" in item.keywords:
                 item.add_marker(skip)
     return
-
