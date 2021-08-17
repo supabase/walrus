@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 import time
 from flupy import walk_files
+from typing import Any
 
 import pytest
 import sqlalchemy
@@ -114,3 +115,21 @@ def sess(engine):
     """)
     conn.execute(text("commit"))
     conn.close()
+
+
+def pytest_addoption(parser: Any) -> None:
+    parser.addoption(
+        "--run-perf",
+        action="store_true",
+        default=False,
+        help="run performance check",
+    )
+
+def pytest_collection_modifyitems(config: Any, items: Any) -> None:
+    if not config.getoption("--run-perf"):
+        skip = pytest.mark.skip(reason="performance test. Use --run-perf to run")
+        for item in items:
+            if "performance" in item.keywords:
+                item.add_marker(skip)
+    return
+

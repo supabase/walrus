@@ -1,3 +1,5 @@
+import pytest
+import os
 from sqlalchemy import text, func, select, literal_column, column, literal
 
 
@@ -10,12 +12,8 @@ SLOT = select([(column('data').op('::')(literal_column('jsonb'))).label("data")]
 RLS_SLOT = select([(func.cdc.rls(column('data').op('::')(literal_column('jsonb')))).label("data")]).select_from(REPLICATION_SLOT_FUNC)
 
 
-def setup_users(sess):
-    sess.execute(text("""
-insert into auth.users(id)
-select extensions.uuid_generate_v4() from generate_series(1,1000);
-    """))
-    sess.commit()
+
+
 
 def setup_note(sess):
     sess.execute(text("""
@@ -47,26 +45,36 @@ alter table note enable row level security;
     data = sess.execute(SLOT).all()
     sess.commit()
 
+def insert_users(sess, n=10):
+    sess.execute(text("""
+insert into auth.users(id)
+select extensions.uuid_generate_v4() from generate_series(1,:n);
+    """), {"n": n})
+    sess.commit()
 
-def setup_subscriptions(sess):
+def insert_subscriptions(sess, n=1):
     sess.execute(text("""
 insert into cdc.subscription(user_id, entity)
-select id, 'public.note' from auth.users limit 2;
-    """))
-    sess.commit()
-    # Flush any wal we created
-    data = sess.execute(SLOT).all()
+select id, 'public.note' from auth.users limit :lim;
+    """), {"lim": n})
     sess.commit()
 
+def insert_notes(sess, n=1):
+    sess.execute(text("""
+insert into public.note(user_id, body)
+select id, 'take out the trash' from auth.users order by id limit :n;
+    """), {"n": n})
+    sess.commit()
+
+def clear_wal(sess):
+    data = sess.execute(SLOT).scalar()
+    sess.commit()
 
 def test_read_wal(sess):
-    setup_users(sess)
     setup_note(sess)
-    sess.execute("""
-insert into public.note(user_id, body)
-select id, 'take out the trash' from auth.users order by id limit 1;
-    """)
-    sess.commit()
+    insert_users(sess)
+    clear_wal(sess)
+    insert_notes(sess, 1)
     data = sess.execute(SLOT).scalar()
     assert 'change' in data
     assert data['change'][0]['table'] == 'note'
@@ -74,12 +82,9 @@ select id, 'take out the trash' from auth.users order by id limit 1;
 
 
 def test_check_wal2json_settings(sess):
-    setup_users(sess);
+    insert_users(sess);
     setup_note(sess);
-    sess.execute("""
-insert into public.note(user_id, body)
-select id, 'take out the trash' from auth.users order by id limit 1;
-    """)
+    insert_notes(sess, 1)
     sess.commit()
     data = sess.execute(SLOT).scalar()
     assert data['change'][0]['table'] == 'note'
@@ -88,14 +93,11 @@ select id, 'take out the trash' from auth.users order by id limit 1;
 
 
 def test_read_wal_w_visible_to_no_rls(sess):
-    setup_users(sess)
     setup_note(sess)
-    setup_subscriptions(sess)
-    sess.execute("""
-insert into public.note(user_id, body)
-select id, 'take out the trash' from auth.users order by id limit 1;
-    """)
-    sess.commit()
+    insert_users(sess)
+    insert_subscriptions(sess)
+    clear_wal(sess)
+    insert_notes(sess)
     data = sess.execute(RLS_SLOT).scalar()
     assert 'change' in data
     assert data['change'][0]['table'] == 'note'
@@ -108,15 +110,12 @@ select id, 'take out the trash' from auth.users order by id limit 1;
     assert len(security["visible_columns"]) == 3
 
 def test_read_wal_w_visible_to_has_rls(sess):
-    setup_users(sess)
+    insert_users(sess)
     setup_note(sess)
     setup_note_rls(sess)
-    setup_subscriptions(sess)
-    sess.execute("""
-insert into public.note(user_id, body)
-select id, 'take out the trash' from auth.users order by id limit 1;
-    """)
-    sess.commit()
+    insert_subscriptions(sess, n=2)
+    clear_wal(sess)
+    insert_notes(sess, n=1)
     data = sess.execute(RLS_SLOT).scalar()
     assert 'change' in data
     assert data['change'][0]['table'] == 'note'
@@ -133,9 +132,37 @@ select id, 'take out the trash' from auth.users order by id limit 1;
     assert security["visible_columns"] == ["id", "user_id", "body"]
 
 
+@pytest.mark.performance
+def test_performance_on_n_recs_n_subscribed(sess):
+    setup_note(sess)
+    setup_note_rls(sess)
+    insert_users(sess, n=20000)
+    clear_wal(sess)
+    
+    with open('perf.tsv', 'w') as f:
+        f.write("n_notes\tn_subscriptions\texec_time\n")
+
+    for n_subscriptions in range(10, 10001, 50):
+        insert_subscriptions(sess, n=n_subscriptions)
+        for n_notes in range(1, 2):
+            clear_wal(sess)
+            insert_notes(sess, n=n_notes)
 
 
+            data = sess.execute(text("""
+            explain analyze
+            select
+                cdc.rls(data::jsonb)
+            from
+                pg_logical_slot_peek_changes('rls_poc', null, null, 'include-pk', '1')
+            """)).scalar()
 
+            exec_time = float(data[data.find("time="):].split(' ')[0].split('=')[1].split('..')[1])
 
+            with open('perf.tsv', 'a') as f:
+                f.write(f"{n_notes}\t{n_subscriptions}\t{exec_time}\n")
 
-
+            sess.execute(text("""
+            truncate table cdc.subscription;
+            truncate table public.note;
+            """))
