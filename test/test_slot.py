@@ -1,21 +1,45 @@
 import os
+from typing import Dict, Any
 
 import pytest
 from sqlalchemy import column, func, literal, literal_column, select, text
 
 REPLICATION_SLOT_FUNC = func.pg_logical_slot_get_changes(
-    "rls_poc", None, None, "include-pk", "1"
+    "rls_poc",
+    None,
+    None,
+    # WAL2JSON settings
+    "include-pk",
+    "1",
+    "format-version",
+    "2",
+    "filter-tables",
+    "cdc.*,auth.*",
 )
 
 # Replication slot w/o RLS
-SLOT = select(
-    [(column("data").op("::")(literal_column("jsonb"))).label("data")]
-).select_from(REPLICATION_SLOT_FUNC)
+SLOT = (
+    select([(column("data").op("::")(literal_column("jsonb"))).label("data")])
+    .select_from(REPLICATION_SLOT_FUNC)
+    .where(
+        (column("data").op("::")(literal_column("jsonb")))
+        .op("->>")("action")
+        .not_in(["B", "C"])
+    )
+)
 
 # Replication slot with RLS
-RLS_SLOT = select(
-    [(func.cdc.rls(column("data").op("::")(literal_column("jsonb")))).label("data")]
-).select_from(REPLICATION_SLOT_FUNC)
+RLS_SLOT = (
+    select(
+        [(func.cdc.rls(column("data").op("::")(literal_column("jsonb")))).label("data")]
+    )
+    .select_from(REPLICATION_SLOT_FUNC)
+    .where(
+        (column("data").op("::")(literal_column("jsonb")))
+        .op("->>")("action")
+        .not_in(["B", "C"])
+    )
+)
 
 
 def setup_note(sess):
@@ -71,7 +95,7 @@ select extensions.uuid_generate_v4() from generate_series(1,:n);
     sess.commit()
 
 
-def insert_subscriptions(sess, n=1):
+def insert_subscriptions(sess, filters: Dict[str, Any] = {}, n=1):
     sess.execute(
         text(
             """
@@ -84,15 +108,15 @@ select id, 'public.note' from auth.users limit :lim;
     sess.commit()
 
 
-def insert_notes(sess, n=1):
+def insert_notes(sess, body="take out the trash", n=1):
     sess.execute(
         text(
             """
 insert into public.note(user_id, body)
-select id, 'take out the trash' from auth.users order by id limit :n;
+select id, :body from auth.users order by id limit :n;
     """
         ),
-        {"n": n},
+        {"n": n, "body": body},
     )
     sess.commit()
 
@@ -108,9 +132,8 @@ def test_read_wal(sess):
     clear_wal(sess)
     insert_notes(sess, 1)
     data = sess.execute(SLOT).scalar()
-    assert "change" in data
-    assert data["change"][0]["table"] == "note"
-    assert "visible_to" not in data["change"][0]
+    assert data["table"] == "note"
+    assert "security" not in data
 
 
 def test_check_wal2json_settings(sess):
@@ -119,9 +142,9 @@ def test_check_wal2json_settings(sess):
     insert_notes(sess, 1)
     sess.commit()
     data = sess.execute(SLOT).scalar()
-    assert data["change"][0]["table"] == "note"
+    assert data["table"] == "note"
     # include-pk setting
-    assert "pk" in data["change"][0]
+    assert "pk" in data
 
 
 def test_read_wal_w_visible_to_no_rls(sess):
@@ -131,11 +154,10 @@ def test_read_wal_w_visible_to_no_rls(sess):
     clear_wal(sess)
     insert_notes(sess)
     data = sess.execute(RLS_SLOT).scalar()
-    assert "change" in data
-    assert data["change"][0]["table"] == "note"
-    assert "security" in data["change"][0]
+    assert data["table"] == "note"
+    assert "security" in data
 
-    security = data["change"][0]["security"]
+    security = data["security"]
     assert not security["is_rls_enabled"]
     # visible_to is empty when no rls enabled
     assert len(security["visible_to"]) == 0
@@ -150,11 +172,10 @@ def test_read_wal_w_visible_to_has_rls(sess):
     clear_wal(sess)
     insert_notes(sess, n=1)
     data = sess.execute(RLS_SLOT).scalar()
-    assert "change" in data
-    assert data["change"][0]["table"] == "note"
-    assert "security" in data["change"][0]
+    assert data["table"] == "note"
+    assert "security" in data
 
-    security = data["change"][0]["security"]
+    security = data["security"]
     assert security["is_rls_enabled"]
     # 2 permitted users
     assert len(security["visible_to"]) == 2

@@ -197,7 +197,7 @@ $$;
 create type cdc.kind as enum('insert', 'update', 'delete');
 
 
-create or replace function  cdc.rls(dat jsonb)
+create or replace function cdc.rls(change jsonb)
     returns jsonb
     language plpgsql
     volatile
@@ -206,33 +206,46 @@ as $$
 Append keys describing user visibility to each change
 
 "security": {
+    "visible_to": [],
     "is_rls_enabled": true,
-    "visible_to": ["296d893b-3031-4008-99cb-dc01cce74586"],
-    "visible_columns": ["id", "body"]
+    "visible_columns": [
+        "id",
+        "user_id",
+        "body"
+    ]
 }
 
-Example *dat*:
+Example *change:
 {
     "change": [
         {
-            "kind": "insert",
+            "pk": [
+                {
+                    "name": "id",
+                    "type": "bigint"
+                }
+            ],
             "table": "notes",
+            "action": "I",
             "schema": "public",
-            "columnnames": [
-                "id",
-                "user_id",
-                "body"
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "bigint",
+                    "value": 28
+                },
+                {
+                    "name": "user_id",
+                    "type": "uuid",
+                    "value": "31b93c49-5435-42bf-97c4-375f207824d4"
+                },
+                {
+                    "name": "body",
+                    "type": "text",
+                    "value": "take out the trash"
+                }
             ],
-            "columntypes": [
-                "bigint",
-                "uuid",
-                "text"
-            ],
-            "columnvalues": [
-                3,
-                "296d893b-3031-4008-99cb-dc01cce74586",
-                "water the plants"
-            ]
+            
         }
     ]
 }
@@ -241,8 +254,7 @@ declare
 	table_name text;
 	schema_name text;
 	entity_ regclass;
-    change jsonb;
-    kind cdc.kind;
+    action char;
     is_rls_enabled bool;
 	
 	-- UUIDs of subscribed users who may view the change
@@ -257,12 +269,12 @@ declare
     prev_role text = current_setting('role');
     prev_search_path text = current_setting('search_path');
 
-    plan_exists bool;
+    selectable_columns text[];
 
     pkey_cols text[];
     pkey_types text[];
     pkey_vals text[];
-    selectable_columns text[];
+
     prep_stmt_sql text;
     prep_stmt_executor_sql text;
     prep_stmt_executor_sql_template text;
@@ -278,93 +290,86 @@ begin
         set_config('search_path', '', true)
     );
 
-	-- For each change in the replication data
-	for change in select * from jsonb_array_elements(dat -> 'change')
-	loop
+    -- Filter out nonsense "begin" and "commit" records
+    -- TODO: find a way to remove them compeltely
+    if (change ->> 'action')::char = any('{"B", "C"}'::char[]) then
+        return null;
+    end if;
 
-        -- Regclass of the table e.g. public.notes
-        schema_name = (change ->> 'schema');
-        table_name = (change ->> 'table');
-		entity_ = (quote_ident(schema_name)|| '.' || quote_ident(table_name))::regclass;
 
-        -- insert, update, delete
-        -- TODO: alter behavior on deletes
-        kind = (change ->> 'kind')::cdc.kind;
+    -- Regclass of the table e.g. public.notes
+    schema_name = (change ->> 'schema');
+    table_name = (change ->> 'table');
+    entity_ = (quote_ident(schema_name)|| '.' || quote_ident(table_name))::regclass;
 
-        -- Array tracking which user_ids have been approved to view the change
-		visible_to_user_ids = '{}';
+    -- Array tracking which user_ids have been approved to view the change
+    visible_to_user_ids = '{}';
 
-        -- Check if RLS is enabled for the table
-        is_rls_enabled = cdc.is_rls_enabled(entity_);
+    -- Check if RLS is enabled for the table
+    is_rls_enabled = cdc.is_rls_enabled(entity_);
 
-        -- Which columns does the "authenticated" role have permission to select (view)
-        selectable_columns = cdc.selectable_columns(entity_);
+    -- Which columns does the "authenticated" role have permission to select (view)
+    selectable_columns = cdc.selectable_columns(entity_);
 
-        -- If RLS is enabled for the table, check each subscribed user to see if they should see the change
-        if is_rls_enabled then
+    -- If RLS is enabled for the table, check each subscribed user to see if they should see the change
+    if is_rls_enabled then
 
-            pkey_cols = cdc.cast_to_array_text(change -> 'pk' -> 'pknames');
-            pkey_types = cdc.cast_to_array_text(change -> 'pk' -> 'pktypes');
+        select
+            array_agg(pks.pk_info ->> 'name' order by pk_ix) pk_names,
+            array_agg(pks.pk_info ->> 'type' order by pk_ix) pk_types,
+            array_agg(cols.col_info ->> 'value' order by pk_ix) pk_vals
+        from
+            jsonb_array_elements(change -> 'pk') with ordinality pks(pk_info, pk_ix),
+            lateral jsonb_array_elements(change -> 'columns') cols(col_info)
+        where
+            (col_info ->> 'name') = (pks.pk_info ->> 'name')
+        into
+            pkey_cols, pkey_types, pkey_vals;
 
-            select
-                array_agg(col_val order by val_ix asc)
-            from
-                unnest(pkey_cols) pkeys(pkey_col),
-                lateral jsonb_array_elements_text(change -> 'columnnames') with ordinality col_n(col_name, col_ix),
-                lateral jsonb_array_elements_text(change -> 'columnvalues') with ordinality col_v(col_val, val_ix)
-            where
-                col_ix = val_ix
-                and col_name::text = pkey_col
-            into pkey_vals;
+        -- Setup a prepared statement for this record
+        prep_stmt_name = lower(schema_name) || '_' || lower(table_name) || '_wal_rls';
+        -- Collect sql string for prepared statment
+        prep_stmt_sql = cdc.build_prepared_statement_sql(prep_stmt_name, entity_, pkey_cols, pkey_types);
+        -- Create the prepared statement
+        execute prep_stmt_sql;
 
-            -- Setup a prepared statement for this record
-            prep_stmt_name = lower(schema_name) || '_' || lower(table_name) || '_wal_rls';
-            -- Collect sql string for prepared statment
-            prep_stmt_sql = cdc.build_prepared_statement_sql(prep_stmt_name, entity_, pkey_cols, pkey_types);
-            -- Create the prepared statement
-            execute prep_stmt_sql;
+        -- For each subscribed user
+        for user_id in select sub.user_id from cdc.subscription sub where sub.entity = entity_
+        loop
+            -- TODO: handle exceptions (permissions) here
+            prep_stmt_executor_sql_template = 'execute %I(''%s'', ' || string_agg('''%s''', ', ') || ')' from generate_series(1,array_length(pkey_vals, 1) );
+            -- Assemble all arguments into an array to pass into the template
+            prep_stmt_params = '{}'::text[] || prep_stmt_name || user_id::text || pkey_vals;
+            execute format(prep_stmt_executor_sql_template, variadic prep_stmt_params) into user_has_access;
 
-            -- For each subscribed user
-            for user_id in select sub.user_id from cdc.subscription sub where sub.entity = entity_
-            loop
-                -- TODO: handle exceptions (permissions) here
-                prep_stmt_executor_sql_template = 'execute %I(''%s'', ' || string_agg('''%s''', ', ') || ')' from generate_series(1,array_length(pkey_vals, 1) );
-                -- Assemble all arguments into an array to pass into the template
-                prep_stmt_params = '{}'::text[] || prep_stmt_name || user_id::text || pkey_vals;
-                execute format(prep_stmt_executor_sql_template, variadic prep_stmt_params) into user_has_access;
+            if user_has_access then
+                visible_to_user_ids = visible_to_user_ids || user_id::text;
+            end if;
+            
+        end loop;
 
-                if user_has_access then
-                    visible_to_user_ids = visible_to_user_ids || user_id::text;
-                end if;
-                
-            end loop;
+        -- Delete the prepared statemetn
+        execute format('deallocate %I', prep_stmt_name);
 
-            -- Delete the prepared statemetn
-            execute format('deallocate %I', prep_stmt_name);
-
-        end if;
-		
-			
-		-- Cast the array of subscribed users to a jsonb array and add it to the change
-		change = change || (
-            select
+    end if;
+    
+        
+    -- Cast the array of subscribed users to a jsonb array and add it to the change
+    change = change || (
+        select
+            jsonb_build_object(
+                'security',
                 jsonb_build_object(
-                    'security',
-                    jsonb_build_object(
-                        'is_rls_enabled',
-                        is_rls_enabled,
-                        'visible_to',
-                        coalesce(cdc.cast_to_jsonb_array_text(visible_to_user_ids), '[]'),
-                        'visible_columns',
-                        cdc.cast_to_jsonb_array_text(selectable_columns)
-                    )
+                    'is_rls_enabled',
+                    is_rls_enabled,
+                    'visible_to',
+                    coalesce(cdc.cast_to_jsonb_array_text(visible_to_user_ids), '[]'),
+                    'visible_columns',
+                    cdc.cast_to_jsonb_array_text(selectable_columns)
                 )
-        );
-		
-		-- Add the updated row to the result set
-		res_agg = res_agg || change;
-	end loop;
-
+            )
+    );
+    
     -- Restore previous configuration
     perform (
         set_config('request.jwt.claim.sub', null, true),
@@ -372,9 +377,6 @@ begin
         set_config('search_path', prev_search_path, true)
     );
 	
-	return jsonb_build_object(
-		'change',
-		(select jsonb_agg(v) from unnest(res_agg) x(v))
-	);
+	return change;
 end;
 $$;
