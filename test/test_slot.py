@@ -13,6 +13,8 @@ REPLICATION_SLOT_FUNC = func.pg_logical_slot_get_changes(
     "1",
     "format-version",
     "2",
+    "actions",
+    "insert,update,delete",
     "filter-tables",
     "cdc.*,auth.*",
 )
@@ -100,7 +102,7 @@ def insert_subscriptions(sess, filters: Dict[str, Any] = {}, n=1):
         text(
             """
 insert into cdc.subscription(user_id, entity)
-select id, 'public.note' from auth.users limit :lim;
+select id, 'public.note' from auth.users order by id limit :lim;
     """
         ),
         {"lim": n},
@@ -178,27 +180,39 @@ def test_read_wal_w_visible_to_has_rls(sess):
     security = data["security"]
     assert security["is_rls_enabled"]
     # 2 permitted users
-    assert len(security["visible_to"]) == 2
-    # user_ids are different
-    assert len(set(security["visible_to"])) == 2
+    assert len(security["visible_to"]) == 1
     assert len(security["visible_to"][0]) > 10
-    assert len(security["visible_columns"]) == 3
     assert security["visible_columns"] == ["id", "user_id", "body"]
 
 
 @pytest.mark.performance
 def test_performance_on_n_recs_n_subscribed(sess):
+    insert_users(sess, n=10000)
     setup_note(sess)
     setup_note_rls(sess)
-    insert_users(sess, n=20000)
     clear_wal(sess)
 
     with open("perf.tsv", "w") as f:
         f.write("n_notes\tn_subscriptions\texec_time\n")
 
-    for n_subscriptions in range(10, 10001, 50):
+    for n_subscriptions in [
+        1,
+        2,
+        3,
+        5,
+        10,
+        25,
+        50,
+        100,
+        250,
+        500,
+        1000,
+        2000,
+        5000,
+        10000,
+    ]:
         insert_subscriptions(sess, n=n_subscriptions)
-        for n_notes in range(1, 2):
+        for n_notes in [1, 2, 3, 4, 5]:
             clear_wal(sess)
             insert_notes(sess, n=n_notes)
 
@@ -209,7 +223,13 @@ def test_performance_on_n_recs_n_subscribed(sess):
             select
                 cdc.rls(data::jsonb)
             from
-                pg_logical_slot_peek_changes('rls_poc', null, null, 'include-pk', '1')
+                pg_logical_slot_peek_changes(
+                    'rls_poc', null, null, 
+                    'include-pk', '1',
+                    'format-version', '2',
+                    'actions', 'insert,update,delete',
+                    'filter-tables', 'cdc.*,auth.*'
+                )
             """
                 )
             ).scalar()
@@ -221,11 +241,44 @@ def test_performance_on_n_recs_n_subscribed(sess):
             with open("perf.tsv", "a") as f:
                 f.write(f"{n_notes}\t{n_subscriptions}\t{exec_time}\n")
 
+            # Confirm that the data is correct
+            data = sess.execute(RLS_SLOT).all()
+            assert len(data) >= 1
+
+            # Accumulate the visible_to person for each change and confirm it matches
+            # the number of notes
+            all_visible_to = []
+            for (row,) in data:
+                for visible_to in row["security"]["visible_to"]:
+                    all_visible_to.append(visible_to)
+            try:
+                assert (
+                    len(all_visible_to)
+                    == len(set(all_visible_to))
+                    == min(n_notes, n_subscriptions)
+                )
+            except:
+                print(
+                    "n_notes",
+                    n_notes,
+                    "n_subscriptions",
+                    n_subscriptions,
+                    all_visible_to,
+                )
+                raise
+
             sess.execute(
                 text(
                     """
-            truncate table cdc.subscription;
             truncate table public.note;
             """
                 )
             )
+
+        sess.execute(
+            text(
+                """
+            truncate table cdc.subscription;
+            """
+            )
+        )

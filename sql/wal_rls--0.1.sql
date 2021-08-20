@@ -75,16 +75,13 @@ Example
     select cdc.build_prepared_statment_sql('public.notes', '{"id"}'::text[], '{"bigint"}'::text[])
 */
 	select
-'prepare ' || prepared_statement_name ||'(uuid, ' || string_agg('text', ', ') || ') as
-with imp as (
-	select cdc.impersonate($1)
-)
+'prepare ' || prepared_statement_name ||'(' || string_agg('text', ', ') || ') as
 select
 	count(*) > 0
 from
 	' || entity || '
 where
-	' || string_agg(quote_ident(col) || '=$' || (1+col_ix)::text || '::' || type_ , ' and ') || ';'
+	' || string_agg(quote_ident(col) || '=$' || (col_ix)::text || '::' || type_ , ' and ') || ';'
 	from
 		unnest(pkey_cols) with ordinality pkc(col, col_ix),
 		lateral unnest(pkey_types) with ordinality pkt(type_, type_ix)
@@ -336,10 +333,13 @@ begin
         -- For each subscribed user
         for user_id in select sub.user_id from cdc.subscription sub where sub.entity = entity_
         loop
+            -- Impersonate the current user
+	        perform cdc.impersonate(user_id);
+
             -- TODO: handle exceptions (permissions) here
-            prep_stmt_executor_sql_template = 'execute %I(''%s'', ' || string_agg('''%s''', ', ') || ')' from generate_series(1,array_length(pkey_vals, 1) );
+            prep_stmt_executor_sql_template = 'execute %I(' || string_agg('''%s''', ', ') || ')' from generate_series(1,array_length(pkey_vals, 1) );
             -- Assemble all arguments into an array to pass into the template
-            prep_stmt_params = '{}'::text[] || prep_stmt_name || user_id::text || pkey_vals;
+            prep_stmt_params = '{}'::text[] || prep_stmt_name || pkey_vals;
             execute format(prep_stmt_executor_sql_template, variadic prep_stmt_params) into user_has_access;
 
             if user_has_access then
