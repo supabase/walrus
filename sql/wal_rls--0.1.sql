@@ -199,7 +199,7 @@ as $$
 /*
 Random string of *n_chars* length that is valid as a sql identifier without quoting
 */
-  select lower(string_agg(chr((ascii('B') + round(random() * 25))::int), '')) from generate_series(1, n_chars)
+  select string_agg(chr((ascii('a') + round(random() * 25))::int), '') from generate_series(1, n_chars)
 $$;
 
 
@@ -280,6 +280,7 @@ declare
     prev_search_path text = current_setting('search_path');
 
     selectable_columns text[];
+    selectable_column text;
 
     pkey_cols text[];
     pkey_types text[];
@@ -311,12 +312,11 @@ begin
     -- Check if RLS is enabled for the table
     is_rls_enabled = cdc.is_rls_enabled(entity_);
 
-    -- Which columns does the "authenticated" role have permission to select (view)
-    selectable_columns = cdc.selectable_columns(entity_);
 
     -- If RLS is enabled for the table, check each subscribed user to see if they should see the change
     if is_rls_enabled then
 
+        -- Store the primary key column names, types, and values in variables
         select
             array_agg(pks.pk_info ->> 'name' order by pk_ix) pk_names,
             array_agg(pks.pk_info ->> 'type' order by pk_ix) pk_types,
@@ -357,6 +357,25 @@ begin
         -- Delete the prepared statemetn
         execute format('deallocate %I', prep_stmt_name);
 
+        -- Which columns does the "authenticated" role have permission to select (view)
+        selectable_columns = cdc.selectable_columns(entity_);
+
+        -- If the "authenticated" role does not have permission to see all columns in the table
+        if array_length(selectable_columns, 1) < jsonb_array_length(change -> 'columns') then
+
+            -- Filter the columns to only the ones that are visible to "authenticated"
+            change = change || (
+                select
+                    jsonb_build_object(
+                        'columns',
+                        jsonb_agg(col_doc)
+                    )
+                from
+                    jsonb_array_elements(change -> 'columns') r(col_doc)
+                where
+                    (col_doc ->> 'name') = any(selectable_columns)
+            );
+        end if;
     end if;
     
         
@@ -369,9 +388,7 @@ begin
                     'is_rls_enabled',
                     is_rls_enabled,
                     'visible_to',
-                    coalesce(cdc.cast_to_jsonb_array_text(visible_to_user_ids), '[]'),
-                    'visible_columns',
-                    cdc.cast_to_jsonb_array_text(selectable_columns)
+                    coalesce(cdc.cast_to_jsonb_array_text(visible_to_user_ids), '[]')
                 )
             )
     );

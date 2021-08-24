@@ -40,9 +40,16 @@ def setup_note(sess):
 create table public.note(
     id bigserial primary key,
     user_id uuid not null references auth.users(id),
-    body text not null
+    body text not null,
+
+    -- dummy column with revoked select for "authenticated"
+    dummy text
+
 );
 create index ix_note_user_id on public.note (user_id);
+
+revoke select on public.note from authenticated;
+grant select (id, user_id, body) on public.note to authenticated;
 
     """
         )
@@ -152,7 +159,6 @@ def test_read_wal_w_visible_to_no_rls(sess):
     assert not security["is_rls_enabled"]
     # visible_to is empty when no rls enabled
     assert len(security["visible_to"]) == 0
-    assert len(security["visible_columns"]) == 3
 
 
 def test_read_wal_w_visible_to_has_rls(sess):
@@ -170,8 +176,14 @@ def test_read_wal_w_visible_to_has_rls(sess):
     assert security["is_rls_enabled"]
     # 2 permitted users
     assert len(security["visible_to"]) == 1
+    # check user_id 
     assert len(security["visible_to"][0]) > 10
-    assert security["visible_columns"] == ["id", "user_id", "body"]
+    # check the "dummy" column is not present in the columns due to
+    # role secutiry on "authenticated" role
+    columns_in_output = [x["name"] for x in data["columns"]]
+    for col in ["id", "user_id", "body"]:
+        assert col in columns_in_output
+    assert "dummy" not in columns_in_output
 
 
 @pytest.mark.performance
