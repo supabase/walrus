@@ -79,14 +79,14 @@ $$;
 
 
 -- Subset from https://postgrest.org/en/v4.1/api.html#horizontal-filtering-rows
-create type cdc.equality_ops as enum(
+create type cdc.equality_op as enum(
     'eq'
 --   , 'neq', 'lt', 'lte', 'gt', 'gte'
 );
 
 create type cdc.user_defined_filter as (
     column_name text,
-    op cdc.equality_ops,
+    op cdc.equality_op,
     value text
 );
 
@@ -351,12 +351,13 @@ declare
 
     filters cdc.user_defined_filter[];
     filter cdc.user_defined_filter;
-    excluded_by_filters boolean;
-    excluded_by_filter boolean;
+    allowed_by_filters boolean;
 
     pkey_cols text[];
     pkey_types text[];
     pkey_vals text[];
+
+    c int;
 
     prep_stmt_sql text;
     prep_stmt_executor_sql text;
@@ -413,22 +414,32 @@ begin
         loop
             
             -- Check if the user defined filters exclude the current record 
-            excluded_by_filters = false;
-            for filter in select * from unnest(filters)
-            loop
-                if filter.op = 'eq'::cdc.equality_ops then
-                    -- Type casts not required for equality
-                    excluded_by_filter = (change ->> filter.column_name) <> filter.value;
-                    excluded_by_filters = excluded_by_filters or excluded_by_filter;
-                else
-                    -- TODO provide implementation of op
-                    raise exception 'unknown equality op'; 
-                end if;
+            allowed_by_filters = true;
 
-            end loop;
+            if array_length(filters, 1) > 0 then
+                select 
+                    -- Default to allowed when no filters present
+                    coalesce(
+                        sum(
+                            case
+                                when (
+                                    f.op = 'eq'::cdc.equality_op
+                                    and (col_doc ->> 'value') = f.value
+                                ) then 1
+                                else 0
+                            end
+                        ) = count(1),
+                        true
+                    )
+                from 
+                    unnest(filters) f
+                    join jsonb_array_elements(change -> 'columns') cols(col_doc)
+                        on f.column_name = (col_doc ->> 'name')
+                into allowed_by_filters, c;
+            end if;
 
             -- If the user defined filters did not exclude the record
-            if not excluded_by_filters then
+            if allowed_by_filters then
 
                 -- Impersonate the current user
                 perform cdc.impersonate(user_id);
