@@ -190,6 +190,19 @@ Example:
 $$;
 
 
+create or replace function cdc.random_slug(n_chars int)
+    returns text
+    language sql
+    volatile
+    strict
+as $$
+/*
+Random string of *n_chars* length that is valid as a sql identifier without quoting
+*/
+  select lower(string_agg(chr((ascii('B') + round(random() * 25))::int), '')) from generate_series(1, n_chars)
+$$;
+
+
 
 create type cdc.kind as enum('insert', 'update', 'delete');
 
@@ -287,13 +300,6 @@ begin
         set_config('search_path', '', true)
     );
 
-    -- Filter out nonsense "begin" and "commit" records
-    -- TODO: find a way to remove them compeltely
-    if (change ->> 'action')::char = any('{"B", "C"}'::char[]) then
-        return null;
-    end if;
-
-
     -- Regclass of the table e.g. public.notes
     schema_name = (change ->> 'schema');
     table_name = (change ->> 'table');
@@ -324,7 +330,7 @@ begin
             pkey_cols, pkey_types, pkey_vals;
 
         -- Setup a prepared statement for this record
-        prep_stmt_name = lower(schema_name) || '_' || lower(table_name) || '_wal_rls';
+        prep_stmt_name = cdc.random_slug(n_chars:=10);
         -- Collect sql string for prepared statment
         prep_stmt_sql = cdc.build_prepared_statement_sql(prep_stmt_name, entity_, pkey_cols, pkey_types);
         -- Create the prepared statement

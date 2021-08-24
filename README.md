@@ -21,6 +21,11 @@ Research & Test setup for applying RLS rules to WAL replication for realtime sec
 
 Currently standalone but will likely be added to supautils for deployment
 
+## Limitations
+
+- truncate statements
+- RLS not applied to delete visibility. i.e. everyone sees deletes and their primary key (TODO)
+
 ### Run the Tests
 
 Requires:

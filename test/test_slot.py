@@ -8,11 +8,10 @@ REPLICATION_SLOT_FUNC = func.pg_logical_slot_get_changes(
     "rls_poc",
     None,
     None,
-    # WAL2JSON settings
-    "include-pk",
-    "1",
-    "format-version",
-    "2",
+    # wal2json settings
+    "format-version", "2",
+    "include-transaction", "false",
+    "include-pk", "true",
     "actions",
     "insert,update,delete",
     "filter-tables",
@@ -23,11 +22,6 @@ REPLICATION_SLOT_FUNC = func.pg_logical_slot_get_changes(
 SLOT = (
     select([(column("data").op("::")(literal_column("jsonb"))).label("data")])
     .select_from(REPLICATION_SLOT_FUNC)
-    .where(
-        (column("data").op("::")(literal_column("jsonb")))
-        .op("->>")("action")
-        .not_in(["B", "C"])
-    )
 )
 
 # Replication slot with RLS
@@ -36,11 +30,6 @@ RLS_SLOT = (
         [(func.cdc.rls(column("data").op("::")(literal_column("jsonb")))).label("data")]
     )
     .select_from(REPLICATION_SLOT_FUNC)
-    .where(
-        (column("data").op("::")(literal_column("jsonb")))
-        .op("->>")("action")
-        .not_in(["B", "C"])
-    )
 )
 
 
@@ -226,6 +215,7 @@ def test_performance_on_n_recs_n_subscribed(sess):
                 pg_logical_slot_peek_changes(
                     'rls_poc', null, null, 
                     'include-pk', '1',
+                    'include-transaction', 'false',
                     'format-version', '2',
                     'actions', 'insert,update,delete',
                     'filter-tables', 'cdc.*,auth.*'
