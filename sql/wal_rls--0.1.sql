@@ -80,8 +80,7 @@ $$;
 
 -- Subset from https://postgrest.org/en/v4.1/api.html#horizontal-filtering-rows
 create type cdc.equality_op as enum(
-    'eq', 'neq'
-    --, 'lt', 'lte', 'gt', 'gte'
+    'eq', 'neq', 'lt', 'lte', 'gt', 'gte'
 );
 
 create type cdc.user_defined_filter as (
@@ -270,6 +269,38 @@ Random string of *n_chars* length that is valid as a sql identifier without quot
 $$;
 
 
+create or replace function cdc.check_equality_op(
+	op cdc.equality_op,
+	type_ regtype,
+	val_1 text,
+	val_2 text
+)
+	returns bool
+	immutable
+	language plpgsql
+as $$
+/*
+Casts *val_1* and *val_2* as type *type_* and check the *op* condition for truthiness
+*/
+declare
+	op_symbol text = (
+		case
+			when op = 'eq' then '='
+			when op = 'neq' then '!='
+			when op = 'lt' then '<'
+			when op = 'lte' then '<='
+			when op = 'gt' then '>'
+			when op = 'gte' then '>='
+			else 'UNKNOWN OP'
+		end
+	);
+	res boolean;
+begin
+	execute format('select %L::'|| type_::text || ' ' || op_symbol || ' %L::'|| type_::text, val_1, val_2) into res;
+	return res;
+end;
+$$;
+
 
 create type cdc.kind as enum('insert', 'update', 'delete');
 
@@ -421,17 +452,12 @@ begin
                     -- Default to allowed when no filters present
                     coalesce(
                         sum(
-                            case
-                                when (
-                                    f.op = 'eq'::cdc.equality_op
-                                    and (col_doc ->> 'value') = f.value
-                                ) then 1
-                                when (
-                                    f.op = 'neq'::cdc.equality_op
-                                    and (col_doc ->> 'value') <> f.value
-                                ) then 1
-                                else 0
-                            end
+                            cdc.check_equality_op(
+                                op:=f.op,
+                                type_:=(col_doc ->> 'type')::regtype,
+                                val_1:=(col_doc ->> 'value'),
+                                val_2:=f.value
+                            )::int
                         ) = count(1),
                         true
                     )

@@ -9,9 +9,12 @@ REPLICATION_SLOT_FUNC = func.pg_logical_slot_get_changes(
     None,
     None,
     # wal2json settings
-    "format-version", "2",
-    "include-transaction", "false",
-    "include-pk", "true",
+    "format-version",
+    "2",
+    "include-transaction",
+    "false",
+    "include-pk",
+    "true",
     "actions",
     "insert,update,delete",
     "filter-tables",
@@ -19,18 +22,14 @@ REPLICATION_SLOT_FUNC = func.pg_logical_slot_get_changes(
 )
 
 # Replication slot w/o RLS
-SLOT = (
-    select([(column("data").op("::")(literal_column("jsonb"))).label("data")])
-    .select_from(REPLICATION_SLOT_FUNC)
-)
+SLOT = select(
+    [(column("data").op("::")(literal_column("jsonb"))).label("data")]
+).select_from(REPLICATION_SLOT_FUNC)
 
 # Replication slot with RLS
-RLS_SLOT = (
-    select(
-        [(func.cdc.rls(column("data").op("::")(literal_column("jsonb")))).label("data")]
-    )
-    .select_from(REPLICATION_SLOT_FUNC)
-)
+RLS_SLOT = select(
+    [(func.cdc.rls(column("data").op("::")(literal_column("jsonb")))).label("data")]
+).select_from(REPLICATION_SLOT_FUNC)
 
 
 def setup_note(sess):
@@ -176,7 +175,7 @@ def test_read_wal_w_visible_to_has_rls(sess):
     assert security["is_rls_enabled"]
     # 2 permitted users
     assert len(security["visible_to"]) == 1
-    # check user_id 
+    # check user_id
     assert len(security["visible_to"][0]) > 10
     # check the "dummy" column is not present in the columns due to
     # role secutiry on "authenticated" role
@@ -186,108 +185,42 @@ def test_read_wal_w_visible_to_has_rls(sess):
     assert "dummy" not in columns_in_output
 
 
-def test_user_defined_eq_filter_no_match(sess):
+@pytest.mark.parametrize(
+    "filter_str,is_true",
+    [
+        # The WAL record body is "bbb"
+        ("('body', 'eq', 'bbb')", True),
+        ("('body', 'eq', 'aaaa')", False),
+        ("('body', 'eq', 'cc')", False),
+        ("('body', 'neq', 'bbb')", False),
+        ("('body', 'neq', 'cat')", True),
+        # TODO test lt, lte, gt, gte
+    ],
+)
+def test_user_defined_eq_filter(filter_str, is_true, sess):
     insert_users(sess)
     setup_note(sess)
     setup_note_rls(sess)
 
     # Test does not match
-    sess.execute("""
+    sess.execute(
+        f"""
 insert into cdc.subscription(user_id, entity, filters)
 select
     id,
     'public.note',
-    array[('body', 'eq', 'does not match')]::cdc.user_defined_filter[]
+    array[{filter_str}]::cdc.user_defined_filter[]
 from
     auth.users order by id
 limit 1;
-    """)
+    """
+    )
     sess.commit()
     clear_wal(sess)
 
-    insert_notes(sess, n=1, body="asdf")
+    insert_notes(sess, n=1, body="bbb")
     data = sess.execute(RLS_SLOT).scalar()
-    assert data["table"] == "note"
-    security = data["security"]
-    assert len(security["visible_to"]) == 0
-
-def test_user_defined_eq_filter_match(sess):
-    insert_users(sess)
-    setup_note(sess)
-    setup_note_rls(sess)
-
-    # Test does not match
-    sess.execute("""
-insert into cdc.subscription(user_id, entity, filters)
-select
-    id,
-    'public.note',
-    array[('body', 'eq', 'match')]::cdc.user_defined_filter[]
-from
-    auth.users order by id
-limit 1;
-    """)
-    sess.commit()
-    clear_wal(sess)
-
-    insert_notes(sess, n=1, body="match")
-    data = sess.execute(RLS_SLOT).scalar()
-    assert data["table"] == "note"
-    security = data["security"]
-    assert len(security["visible_to"]) == 1
-
-
-def test_user_defined_neq_filter_no_match(sess):
-    insert_users(sess)
-    setup_note(sess)
-    setup_note_rls(sess)
-
-    # Test does not match
-    sess.execute("""
-insert into cdc.subscription(user_id, entity, filters)
-select
-    id,
-    'public.note',
-    array[('body', 'neq', 'asdf')]::cdc.user_defined_filter[]
-from
-    auth.users order by id
-limit 1;
-    """)
-    sess.commit()
-    clear_wal(sess)
-
-    insert_notes(sess, n=1, body="asdf")
-    data = sess.execute(RLS_SLOT).scalar()
-    assert data["table"] == "note"
-    security = data["security"]
-    assert len(security["visible_to"]) == 0
-
-def test_user_defined_neq_filter_match(sess):
-    insert_users(sess)
-    setup_note(sess)
-    setup_note_rls(sess)
-
-    # Test does not match
-    sess.execute("""
-insert into cdc.subscription(user_id, entity, filters)
-select
-    id,
-    'public.note',
-    array[('body', 'neq', 'different')]::cdc.user_defined_filter[]
-from
-    auth.users order by id
-limit 1;
-    """)
-    sess.commit()
-    clear_wal(sess)
-
-    insert_notes(sess, n=1, body="other")
-    data = sess.execute(RLS_SLOT).scalar()
-    assert data["table"] == "note"
-    security = data["security"]
-    assert len(security["visible_to"]) == 1
-
-
+    assert len(data["security"]["visible_to"]) == (1 if is_true else 0)
 
 
 @pytest.mark.performance
