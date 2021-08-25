@@ -185,18 +185,28 @@ def test_read_wal_w_visible_to_has_rls(sess):
     assert "dummy" not in columns_in_output
 
 
-@pytest.mark.parametrize(
-    "filter_str,is_true",
-    [
-        # The WAL record body is "bbb"
-        ("('body', 'eq', 'bbb')", True),
-        ("('body', 'eq', 'aaaa')", False),
-        ("('body', 'eq', 'cc')", False),
-        ("('body', 'neq', 'bbb')", False),
-        ("('body', 'neq', 'cat')", True),
-        # TODO test lt, lte, gt, gte
-    ],
-)
+@pytest.mark.parametrize("filter_str,is_true", [
+    # The WAL record body is "bbb"
+    ("('body', 'eq', 'bbb')", True),
+    ("('body', 'eq', 'aaaa')", False),
+    ("('body', 'eq', 'cc')", False),
+    ("('body', 'neq', 'bbb')", False),
+    ("('body', 'neq', 'cat')", True),
+    ("('body', 'lt', 'aa')", False),
+    ("('body', 'lt', 'ccc')", True),
+    ("('body', 'lt', 'bbb')", False),
+    ("('body', 'lte', 'aa')", False),
+    ("('body', 'lte', 'ccc')", True),
+    ("('body', 'lte', 'bbb')", True),
+    ("('body', 'gt', 'aa')", True),
+    ("('body', 'gt', 'ccc')", False),
+    ("('body', 'gt', 'bbb')", False),
+    ("('body', 'gte', 'aa')", True),
+    ("('body', 'gte', 'ccc')", False),
+    ("('body', 'gte', 'bbb')", True),
+
+    # TODO test lt, lte, gt, gte
+])
 def test_user_defined_eq_filter(filter_str, is_true, sess):
     insert_users(sess)
     setup_note(sess)
