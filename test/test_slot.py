@@ -237,6 +237,58 @@ limit 1;
     assert len(security["visible_to"]) == 1
 
 
+def test_user_defined_neq_filter_no_match(sess):
+    insert_users(sess)
+    setup_note(sess)
+    setup_note_rls(sess)
+
+    # Test does not match
+    sess.execute("""
+insert into cdc.subscription(user_id, entity, filters)
+select
+    id,
+    'public.note',
+    array[('body', 'neq', 'asdf')]::cdc.user_defined_filter[]
+from
+    auth.users order by id
+limit 1;
+    """)
+    sess.commit()
+    clear_wal(sess)
+
+    insert_notes(sess, n=1, body="asdf")
+    data = sess.execute(RLS_SLOT).scalar()
+    assert data["table"] == "note"
+    security = data["security"]
+    assert len(security["visible_to"]) == 0
+
+def test_user_defined_neq_filter_match(sess):
+    insert_users(sess)
+    setup_note(sess)
+    setup_note_rls(sess)
+
+    # Test does not match
+    sess.execute("""
+insert into cdc.subscription(user_id, entity, filters)
+select
+    id,
+    'public.note',
+    array[('body', 'neq', 'different')]::cdc.user_defined_filter[]
+from
+    auth.users order by id
+limit 1;
+    """)
+    sess.commit()
+    clear_wal(sess)
+
+    insert_notes(sess, n=1, body="other")
+    data = sess.execute(RLS_SLOT).scalar()
+    assert data["table"] == "note"
+    security = data["security"]
+    assert len(security["visible_to"]) == 1
+
+
+
 
 @pytest.mark.performance
 def test_performance_on_n_recs_n_subscribed(sess):

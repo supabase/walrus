@@ -80,8 +80,8 @@ $$;
 
 -- Subset from https://postgrest.org/en/v4.1/api.html#horizontal-filtering-rows
 create type cdc.equality_op as enum(
-    'eq'
---   , 'neq', 'lt', 'lte', 'gt', 'gte'
+    'eq', 'neq'
+    --, 'lt', 'lte', 'gt', 'gte'
 );
 
 create type cdc.user_defined_filter as (
@@ -425,6 +425,10 @@ begin
                                 when (
                                     f.op = 'eq'::cdc.equality_op
                                     and (col_doc ->> 'value') = f.value
+                                ) then 1
+                                when (
+                                    f.op = 'neq'::cdc.equality_op
+                                    and (col_doc ->> 'value') <> f.value
                                 ) then 1
                                 else 0
                             end
