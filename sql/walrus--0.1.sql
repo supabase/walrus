@@ -140,7 +140,7 @@ create trigger tr_check_filters
 
 
 grant all on cdc.subscription to postgres;
---grant select on cdc.subscription to authenticated;
+grant select on cdc.subscription to authenticated;
 
 
 create or replace function  cdc.is_rls_enabled(entity regclass)
@@ -160,21 +160,6 @@ Is Row Level Security enabled for the entity
 $$;
 
 
-create or replace function cdc.impersonate(user_id uuid)
-    returns void
-    volatile
-    language sql
-as $$
-/*
-Updates the current transaction's config so queries can by made as a user
-authenticated as *user_id* 
-*/
-    select
-        set_config('request.jwt.claim.sub', user_id::text, true),
-        set_config('role', 'authenticated', true)
-$$;
-
-
 create or replace function cdc.build_prepared_statement_sql(
     prepared_statement_name text,
 	entity regclass,
@@ -187,9 +172,8 @@ create or replace function cdc.build_prepared_statement_sql(
     language sql
 as $$
 /*
-Builds a sql string that, if executed, creates a prepared statement to impersonatea user
-and tests if that user has access to a data row described by *entity* and an array of
-it'd primray key values.
+Builds a sql string that, if executed, creates a prepared statement to 
+tests retrive a row from *entity* by its primary key columns.
 
 Example
     select cdc.build_prepared_statment_sql('public.notes', '{"id"}'::text[], '{"bigint"}'::text[])
@@ -210,8 +194,6 @@ where
 	group by
 		entity
 $$;
-
-
 
 
 create or replace function cdc.cast_to_array_text(arr jsonb)
@@ -254,11 +236,10 @@ Example:
 $$;
 
 
-create or replace function cdc.random_slug(n_chars int)
+create or replace function cdc.random_slug(n_chars int default 10)
     returns text
     language sql
     volatile
-    strict
 as $$
 /*
 Random string of *n_chars* length that is valid as a sql identifier without quoting
@@ -399,94 +380,99 @@ begin
         set_config('search_path', '', true)
     );
 
-    -- If RLS is enabled for the table, check each subscribed user to see if they should see the change
-    if is_rls_enabled then
 
-        -- Store the primary key column names, types, and values in variables
-        select
-            array_agg(pks.pk_info ->> 'name' order by pk_ix) pk_names,
-            array_agg(pks.pk_info ->> 'type' order by pk_ix) pk_types,
-            array_agg(cols.col_info ->> 'value' order by pk_ix) pk_vals
-        from
-            jsonb_array_elements(change -> 'pk') with ordinality pks(pk_info, pk_ix),
-            lateral jsonb_array_elements(change -> 'columns') cols(col_info)
-        where
-            (col_info ->> 'name') = (pks.pk_info ->> 'name')
-        into
-            pkey_cols, pkey_types, pkey_vals;
+    -- Store the primary key column names, types, and values in variables
+    select
+        array_agg(pks.pk_info ->> 'name' order by pk_ix) pk_names,
+        array_agg(pks.pk_info ->> 'type' order by pk_ix) pk_types,
+        array_agg(cols.col_info ->> 'value' order by pk_ix) pk_vals
+    from
+        jsonb_array_elements(change -> 'pk') with ordinality pks(pk_info, pk_ix),
+        lateral jsonb_array_elements(change -> 'columns') cols(col_info)
+    where
+        (col_info ->> 'name') = (pks.pk_info ->> 'name')
+    into
+        pkey_cols, pkey_types, pkey_vals;
 
-        -- Collect sql string for prepared statment
-        prep_stmt_sql = cdc.build_prepared_statement_sql(prep_stmt_name, entity_, pkey_cols, pkey_types);
-        -- Create the prepared statement
-        execute prep_stmt_sql;
+    -- Collect sql string for prepared statment
+    -- SQL string that will create a prepared statement to look up current *entity_* using primary key
+    prep_stmt_sql = cdc.build_prepared_statement_sql(prep_stmt_name, entity_, pkey_cols, pkey_types);
+    execute prep_stmt_sql;
 
-        -- For each subscribed user
-        for user_id, filters  in select sub.user_id, sub.filters from cdc.subscription sub where sub.entity = entity_
-        loop
-            
-            -- Check if the user defined filters exclude the current record 
-            allowed_by_filters = true;
+    -- SQL string assembling primary key arguments to execute the prepared statement
+    prep_stmt_executor_sql_template = 'execute %I(' || string_agg('''%s''', ', ') || ')' from generate_series(1,array_length(pkey_vals, 1) );
+    prep_stmt_params = '{}'::text[] || prep_stmt_name || pkey_vals;
 
-            if array_length(filters, 1) > 0 then
-                select 
-                    -- Default to allowed when no filters present
-                    coalesce(
-                        sum(
-                            cdc.check_equality_op(
-                                op:=f.op,
-                                type_:=(col_doc ->> 'type')::regtype,
-                                val_1:=(col_doc ->> 'value'),
-                                val_2:=f.value
-                            )::int
-                        ) = count(1),
-                        true
-                    )
-                from 
-                    unnest(filters) f
-                    join jsonb_array_elements(change -> 'columns') cols(col_doc)
-                        on f.column_name = (col_doc ->> 'name')
-                into allowed_by_filters;
-            end if;
+    -- Set role to "authenticated" outside of hot loop because calls to set_config are expensive
+    perform set_config('role', 'authenticated', true);
 
-            -- If the user defined filters did not exclude the record
-            if allowed_by_filters then
+    -- For each subscribed user
+    for user_id, filters  in select sub.user_id, sub.filters from cdc.subscription sub where sub.entity = entity_
+    loop
+        
+        -- Check if the user defined filters exclude the current record 
+        allowed_by_filters = true;
 
-                -- Impersonate the current user
-                perform cdc.impersonate(user_id);
-
-                prep_stmt_executor_sql_template = 'execute %I(' || string_agg('''%s''', ', ') || ')' from generate_series(1,array_length(pkey_vals, 1) );
-                -- Assemble all arguments into an array to pass into the template
-                prep_stmt_params = '{}'::text[] || prep_stmt_name || pkey_vals;
-
-                execute format(prep_stmt_executor_sql_template, variadic prep_stmt_params) into user_has_access;
-
-                if user_has_access then
-                    visible_to_user_ids = visible_to_user_ids || user_id::text;
-                end if;
-            end if;
-
-        end loop;
-
-        -- Delete the prepared statemetn
-        execute format('deallocate %I', prep_stmt_name);
-
-
-        -- If the "authenticated" role does not have permission to see all columns in the table
-        if array_length(selectable_columns, 1) < jsonb_array_length(change -> 'columns') then
-
-            -- Filter the columns to only the ones that are visible to "authenticated"
-            change = change || (
-                select
-                    jsonb_build_object(
-                        'columns',
-                        jsonb_agg(col_doc)
-                    )
-                from
-                    jsonb_array_elements(change -> 'columns') r(col_doc)
-                where
-                    (col_doc ->> 'name') = any(selectable_columns)
-            );
+        if array_length(filters, 1) > 0 then
+            select 
+                -- Default to allowed when no filters present
+                coalesce(
+                    sum(
+                        cdc.check_equality_op(
+                            op:=f.op,
+                            type_:=(col_doc ->> 'type')::regtype,
+                            val_1:=(col_doc ->> 'value'),
+                            val_2:=f.value
+                        )::int
+                    ) = count(1),
+                    true
+                )
+            from 
+                unnest(filters) f
+                join jsonb_array_elements(change -> 'columns') cols(col_doc)
+                    on f.column_name = (col_doc ->> 'name')
+            into allowed_by_filters;
         end if;
+
+        -- If the user defined filters did not exclude the record
+        if allowed_by_filters then
+
+            -- Check if the user has access
+            if is_rls_enabled then
+                -- Impersonate the current user
+                --perform cdc.impersonate(user_id);
+                perform set_config('request.jwt.claim.sub', user_id::text, true);
+                -- Lookup record by primary key while impersonating *user_id*
+                execute format(prep_stmt_executor_sql_template, variadic prep_stmt_params) into user_has_access;
+            else
+                user_has_access = true;
+            end if;
+
+            if user_has_access then
+                visible_to_user_ids = visible_to_user_ids || user_id::text;
+            end if;
+        end if;
+
+    end loop;
+
+    -- Delete the prepared statemetn
+    execute format('deallocate %I', prep_stmt_name);
+
+    -- If the "authenticated" role does not have permission to see all columns in the table
+    if array_length(selectable_columns, 1) < jsonb_array_length(change -> 'columns') then
+
+        -- Filter the columns to only the ones that are visible to "authenticated"
+        change = change || (
+            select
+                jsonb_build_object(
+                    'columns',
+                    jsonb_agg(col_doc)
+                )
+            from
+                jsonb_array_elements(change -> 'columns') r(col_doc)
+            where
+                (col_doc ->> 'name') = any(selectable_columns)
+        );
     end if;
     
         

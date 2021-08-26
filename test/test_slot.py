@@ -156,8 +156,8 @@ def test_read_wal_w_visible_to_no_rls(sess):
 
     security = data["security"]
     assert not security["is_rls_enabled"]
-    # visible_to is empty when no rls enabled
-    assert len(security["visible_to"]) == 0
+    # visible_to includes subscribed user when no rls enabled
+    assert len(security["visible_to"]) == 1
 
 
 def test_read_wal_w_visible_to_has_rls(sess):
