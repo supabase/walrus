@@ -305,7 +305,7 @@ $$;
 create type cdc.kind as enum('insert', 'update', 'delete');
 
 
-create or replace function cdc.rls(change jsonb)
+create or replace function cdc.wal_rls(change jsonb)
     returns jsonb
     language plpgsql
     volatile
@@ -314,13 +314,8 @@ as $$
 Append keys describing user visibility to each change
 
 "security": {
-    "visible_to": [],
+    "visible_to": ["31b93c49-5435-42bf-97c4-375f207824d4"],
     "is_rls_enabled": true,
-    "visible_columns": [
-        "id",
-        "user_id",
-        "body"
-    ]
 }
 
 Example *change:
@@ -474,10 +469,10 @@ begin
                 -- Impersonate the current user
                 perform cdc.impersonate(user_id);
 
-                -- TODO: handle exceptions (permissions) here
                 prep_stmt_executor_sql_template = 'execute %I(' || string_agg('''%s''', ', ') || ')' from generate_series(1,array_length(pkey_vals, 1) );
                 -- Assemble all arguments into an array to pass into the template
                 prep_stmt_params = '{}'::text[] || prep_stmt_name || pkey_vals;
+
                 execute format(prep_stmt_executor_sql_template, variadic prep_stmt_params) into user_has_access;
 
                 if user_has_access then
@@ -532,7 +527,8 @@ begin
         set_config('role', prev_role, true),
         set_config('search_path', prev_search_path, true)
     );
-	
+
 	return change;
+	
 end;
 $$;

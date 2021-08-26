@@ -28,7 +28,7 @@ SLOT = select(
 
 # Replication slot with RLS
 RLS_SLOT = select(
-    [(func.cdc.rls(column("data").op("::")(literal_column("jsonb")))).label("data")]
+    [(func.cdc.wal_rls(column("data").op("::")(literal_column("jsonb")))).label("data")]
 ).select_from(REPLICATION_SLOT_FUNC)
 
 
@@ -270,7 +270,7 @@ def test_performance_on_n_recs_n_subscribed(sess):
                     """
             explain analyze
             select
-                cdc.rls(data::jsonb)
+                cdc.wal_rls(data::jsonb)
             from
                 pg_logical_slot_peek_changes(
                     'rls_poc', null, null, 
