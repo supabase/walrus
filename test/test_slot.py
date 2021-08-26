@@ -169,6 +169,10 @@ def test_read_wal_w_visible_to_has_rls(sess):
     insert_notes(sess, n=1)
     data = sess.execute(RLS_SLOT).scalar()
     assert data["table"] == "note"
+
+    # pk info was filtered out
+    assert 'pk' not in data
+
     assert "security" in data
 
     security = data["security"]

@@ -3,8 +3,6 @@
         Write Ahead Log Row Level Security
 */
 
-
-
 create schema cdc;
 grant usage on schema cdc to postgres;
 grant usage on schema cdc to authenticated;
@@ -250,7 +248,7 @@ Example:
     select cdc.cast_to_jsonb_array_text('{"hello", "world"}'::text[])
 */
     select
-        jsonb_agg(xyz.v)
+        coalesce(jsonb_agg(xyz.v), '{}'::jsonb)
     from
         unnest(arr) xyz(v);
 $$;
@@ -305,6 +303,8 @@ $$;
 create type cdc.kind as enum('insert', 'update', 'delete');
 
 
+
+
 create or replace function cdc.wal_rls(change jsonb)
     returns jsonb
     language plpgsql
@@ -354,43 +354,42 @@ Example *change:
 }
 */
 declare
-	table_name text;
-	schema_name text;
-	entity_ regclass;
+    -- Regclass of the table e.g. public.notes
+	entity_ regclass = (quote_ident(change ->> 'schema')|| '.' || quote_ident(change ->> 'table'))::regclass;
+
+    -- I, U, D, T: insert, update ...
     action char;
-    is_rls_enabled bool;
+
+    -- Check if RLS is enabled for the table
+    is_rls_enabled bool = cdc.is_rls_enabled(entity_);
 	
 	-- UUIDs of subscribed users who may view the change
-	visible_to_user_ids text[];
-	
-	-- Internal state vars
-	res_agg jsonb[] = '{}';
-	query_has_access text;
-	user_id uuid;
-	user_has_access bool;
+	visible_to_user_ids text[] = '{}';
 
+    -- Which columns does the "authenticated" role have permission to select (view)
+    selectable_columns text[] = cdc.selectable_columns(entity_);
+	
+    -- role and search path at time function is called
     prev_role text = current_setting('role');
     prev_search_path text = current_setting('search_path');
 
-    selectable_columns text[];
-    selectable_column text;
+    -- Internal state tracking 
+	user_id uuid;
+	user_has_access bool;
 
     filters cdc.user_defined_filter[];
-    filter cdc.user_defined_filter;
     allowed_by_filters boolean;
 
     pkey_cols text[];
     pkey_types text[];
     pkey_vals text[];
 
-    c int;
-
     prep_stmt_sql text;
-    prep_stmt_executor_sql text;
     prep_stmt_executor_sql_template text;
     prep_stmt_params text[];
-    -- might make this dynamic
-    prep_stmt_name text = 'xyz';
+
+    -- Setup a prepared statement for this record
+    prep_stmt_name text = cdc.random_slug(n_chars:=10);
 
 begin
     -- Without nulling out search path, casting a table prefixed with a schema that is
@@ -399,18 +398,6 @@ begin
     perform (
         set_config('search_path', '', true)
     );
-
-    -- Regclass of the table e.g. public.notes
-    schema_name = (change ->> 'schema');
-    table_name = (change ->> 'table');
-    entity_ = (quote_ident(schema_name)|| '.' || quote_ident(table_name))::regclass;
-
-    -- Array tracking which user_ids have been approved to view the change
-    visible_to_user_ids = '{}';
-
-    -- Check if RLS is enabled for the table
-    is_rls_enabled = cdc.is_rls_enabled(entity_);
-
 
     -- If RLS is enabled for the table, check each subscribed user to see if they should see the change
     if is_rls_enabled then
@@ -428,8 +415,6 @@ begin
         into
             pkey_cols, pkey_types, pkey_vals;
 
-        -- Setup a prepared statement for this record
-        prep_stmt_name = cdc.random_slug(n_chars:=10);
         -- Collect sql string for prepared statment
         prep_stmt_sql = cdc.build_prepared_statement_sql(prep_stmt_name, entity_, pkey_cols, pkey_types);
         -- Create the prepared statement
@@ -460,7 +445,7 @@ begin
                     unnest(filters) f
                     join jsonb_array_elements(change -> 'columns') cols(col_doc)
                         on f.column_name = (col_doc ->> 'name')
-                into allowed_by_filters, c;
+                into allowed_by_filters;
             end if;
 
             -- If the user defined filters did not exclude the record
@@ -485,8 +470,6 @@ begin
         -- Delete the prepared statemetn
         execute format('deallocate %I', prep_stmt_name);
 
-        -- Which columns does the "authenticated" role have permission to select (view)
-        selectable_columns = cdc.selectable_columns(entity_);
 
         -- If the "authenticated" role does not have permission to see all columns in the table
         if array_length(selectable_columns, 1) < jsonb_array_length(change -> 'columns') then
@@ -516,7 +499,7 @@ begin
                     'is_rls_enabled',
                     is_rls_enabled,
                     'visible_to',
-                    coalesce(cdc.cast_to_jsonb_array_text(visible_to_user_ids), '[]')
+                    cdc.cast_to_jsonb_array_text(visible_to_user_ids)
                 )
             )
     );
@@ -527,8 +510,9 @@ begin
         set_config('role', prev_role, true),
         set_config('search_path', prev_search_path, true)
     );
-
-	return change;
+    
+    -- return the change object without primary key info 
+	return (change #- '{pk}');
 	
 end;
 $$;
