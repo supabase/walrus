@@ -41,14 +41,45 @@ where `is_rls_enabled` is a `bool` to check if row level security is applied for
 
 For each subscribed user, ever WAL record is passed into `cdc.wal_rls(jsonb)` which:
 
-- impersonates that user by setting the role to `authenticated` and `request.jwt.claim.sub` to the subcribed user's id
+- impersonates that user by setting the current transaction's role to `authenticated` and `request.jwt.claim.sub` to the subcribed user's id
+See 
+
 - queries for the row described by the WAL record using its primary key values to ensure uniqueness and performance
-- Applies user defined filters associated with each user's subscription to the row to remove records that are not of interest
-
-
+- Applies user defined filters associated with each user's subscription to the row to remove records were not requested
+- Checks which columns of the WAL record are visible to the `authenticated` role and filters out any 
 
 
 ## Usage
+
+### TL;DR
+
+If you're familiar with logical replication, `pg_logical_slot_get_changes` and `wal2json`:
+
+```sql
+select
+    cdc.wal_rls(data::jsonb)
+from
+    pg_logical_slot_get_changes(
+        'realtime_slot', null, null,
+        'include-pk', '1',
+        'include-transaction', 'false',
+        'format-version', '2',
+        -- TODO: delete + truncate
+        'actions', 'insert,update',
+        'filter-tables', 'cdc.*,auth.*'
+    )
+```
+
+### Explanation
+
+`pg_logical_get_changes` is a function returning WAL records associated with a logical replication slot (in the example above the slot name is `realtime_slot`).
+
+To create a replication slots, we have to choose an [output plugin](https://wiki.postgresql.org/wiki/Logical_Decoding_Plugins) that will determine the output format. Since 
+
+We can create a new replication slot with the 
+```
+select * from pg_create_logical_replication_slot('realtime_slot', 'wal2json')
+```
 
 
 
@@ -58,7 +89,7 @@ Currently standalone but will likely be added to supautils for deployment
 
 ## Limitations
 
-- truncate statements
+- No implementation for truncate/delete statement. There are options, just need to pick a strategy  
 - RLS not applied to delete visibility. i.e. everyone sees deletes and their primary key (TODO)
 
 ### Run the Tests
