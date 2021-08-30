@@ -1,6 +1,6 @@
 /*
-    WAL_RLS:
-        Write Ahead Log Row Level Security
+    WALRUS:
+        Write Ahead Log Realtime Unified Security
 */
 
 create schema cdc;
@@ -283,11 +283,16 @@ $$;
 
 create type cdc.kind as enum('insert', 'update', 'delete');
 
+create type cdc.wal_rls as (
+    wal jsonb,
+    is_rls_enabled boolean,
+    users uuid[],
+    errors text[]
+);
 
 
-
-create or replace function cdc.wal_rls(change jsonb)
-    returns jsonb
+create or replace function cdc.apply_rls(wal jsonb)
+    returns cdc.wal_rls 
     language plpgsql
     volatile
 as $$
@@ -336,7 +341,7 @@ Example *change:
 */
 declare
     -- Regclass of the table e.g. public.notes
-	entity_ regclass = (quote_ident(change ->> 'schema')|| '.' || quote_ident(change ->> 'table'))::regclass;
+	entity_ regclass = (quote_ident(wal ->> 'schema')|| '.' || quote_ident(wal ->> 'table'))::regclass;
 
     -- I, U, D, T: insert, update ...
     action char;
@@ -345,7 +350,7 @@ declare
     is_rls_enabled bool = cdc.is_rls_enabled(entity_);
 	
 	-- UUIDs of subscribed users who may view the change
-	visible_to_user_ids text[] = '{}';
+	visible_to_user_ids uuid[] = '{}';
 
     -- Which columns does the "authenticated" role have permission to select (view)
     selectable_columns text[] = cdc.selectable_columns(entity_);
@@ -353,6 +358,9 @@ declare
     -- role and search path at time function is called
     prev_role text = current_setting('role');
     prev_search_path text = current_setting('search_path');
+
+    columns jsonb = (wal -> 'columns');
+    errors text[] = '{}';
 
     -- Internal state tracking 
 	user_id uuid;
@@ -387,8 +395,8 @@ begin
         array_agg(pks.pk_info ->> 'type' order by pk_ix) pk_types,
         array_agg(cols.col_info ->> 'value' order by pk_ix) pk_vals
     from
-        jsonb_array_elements(change -> 'pk') with ordinality pks(pk_info, pk_ix),
-        lateral jsonb_array_elements(change -> 'columns') cols(col_info)
+        jsonb_array_elements(wal -> 'pk') with ordinality pks(pk_info, pk_ix),
+        lateral jsonb_array_elements(columns) cols(col_info)
     where
         (col_info ->> 'name') = (pks.pk_info ->> 'name')
     into
@@ -429,7 +437,7 @@ begin
                 )
             from 
                 unnest(filters) f
-                join jsonb_array_elements(change -> 'columns') cols(col_doc)
+                join jsonb_array_elements(columns) cols(col_doc)
                     on f.column_name = (col_doc ->> 'name')
             into allowed_by_filters;
         end if;
@@ -449,7 +457,7 @@ begin
             end if;
 
             if user_has_access then
-                visible_to_user_ids = visible_to_user_ids || user_id::text;
+                visible_to_user_ids = visible_to_user_ids || user_id;
             end if;
         end if;
 
@@ -459,36 +467,21 @@ begin
     execute format('deallocate %I', prep_stmt_name);
 
     -- If the "authenticated" role does not have permission to see all columns in the table
-    if array_length(selectable_columns, 1) < jsonb_array_length(change -> 'columns') then
+    if array_length(selectable_columns, 1) < jsonb_array_length(columns) then
 
         -- Filter the columns to only the ones that are visible to "authenticated"
-        change = change || (
+        wal = wal || (
             select
                 jsonb_build_object(
                     'columns',
                     jsonb_agg(col_doc)
                 )
             from
-                jsonb_array_elements(change -> 'columns') r(col_doc)
+                jsonb_array_elements(wal -> 'columns') r(col_doc)
             where
                 (col_doc ->> 'name') = any(selectable_columns)
         );
     end if;
-    
-        
-    -- Cast the array of subscribed users to a jsonb array and add it to the change
-    change = change || (
-        select
-            jsonb_build_object(
-                'security',
-                jsonb_build_object(
-                    'is_rls_enabled',
-                    is_rls_enabled,
-                    'visible_to',
-                    cdc.cast_to_jsonb_array_text(visible_to_user_ids)
-                )
-            )
-    );
     
     -- Restore previous configuration
     perform (
@@ -498,7 +491,12 @@ begin
     );
     
     -- return the change object without primary key info 
-	return (change #- '{pk}');
+	return (
+        (wal #- '{pk}'),
+        is_rls_enabled,
+        visible_to_user_ids,
+        errors
+    )::cdc.wal_rls;
 	
 end;
 $$;

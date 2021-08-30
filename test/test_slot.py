@@ -1,35 +1,41 @@
 import os
 from typing import Any, Dict
+from uuid import UUID
 
 import pytest
 from sqlalchemy import column, func, literal, literal_column, select, text
 
-REPLICATION_SLOT_FUNC = func.pg_logical_slot_get_changes(
-    "rls_poc",
-    None,
-    None,
-    # wal2json settings
-    "format-version",
-    "2",
-    "include-transaction",
-    "false",
-    "include-pk",
-    "true",
-    "actions",
-    "insert,update,delete",
-    "filter-tables",
-    "cdc.*,auth.*",
-)
+QUERY = text("""
+select
+    data::jsonb,
+    xyz.wal,
+    xyz.is_rls_enabled,
+    xyz.users,
+    xyz.errors
+from
+    pg_logical_slot_get_changes(
+        'rls_poc', null, null, 
+        'include-pk', '1',
+        'include-transaction', 'false',
+        'format-version', '2',
+        'actions', 'insert,update,delete',
+        'filter-tables', 'cdc.*,auth.*'
+    ),
+    lateral (
+        select
+            x.wal,
+            x.is_rls_enabled,
+            x.users,
+            x.errors
+        from
+            cdc.apply_rls(data::jsonb) x(wal, is_rls_enabled, users, errors)
+    ) xyz
+""")
 
-# Replication slot w/o RLS
-SLOT = select(
-    [(column("data").op("::")(literal_column("jsonb"))).label("data")]
-).select_from(REPLICATION_SLOT_FUNC)
 
-# Replication slot with RLS
-RLS_SLOT = select(
-    [(func.cdc.wal_rls(column("data").op("::")(literal_column("jsonb")))).label("data")]
-).select_from(REPLICATION_SLOT_FUNC)
+def clear_wal(sess):
+    data = sess.execute("select * from pg_logical_slot_get_changes('rls_poc', null, null)").scalar()
+    sess.commit()
 
 
 def setup_note(sess):
@@ -54,9 +60,6 @@ grant select (id, user_id, body) on public.note to authenticated;
         )
     )
     sess.commit()
-    # Flush any wal we created
-    data = sess.execute(SLOT).all()
-    sess.commit()
 
 
 def setup_note_rls(sess):
@@ -73,9 +76,6 @@ alter table note enable row level security;
     """
         )
     )
-    sess.commit()
-    # Flush any wal we created
-    data = sess.execute(SLOT).all()
     sess.commit()
 
 
@@ -118,30 +118,26 @@ select id, :body from auth.users order by id limit :n;
     sess.commit()
 
 
-def clear_wal(sess):
-    data = sess.execute(SLOT).scalar()
-    sess.commit()
-
 
 def test_read_wal(sess):
     setup_note(sess)
     insert_users(sess)
     clear_wal(sess)
     insert_notes(sess, 1)
-    data = sess.execute(SLOT).scalar()
-    assert data["table"] == "note"
-    assert "security" not in data
+    raw, *_ = sess.execute(QUERY).one()
+    assert raw["table"] == "note"
 
 
 def test_check_wal2json_settings(sess):
     insert_users(sess)
     setup_note(sess)
+    clear_wal(sess)
     insert_notes(sess, 1)
     sess.commit()
-    data = sess.execute(SLOT).scalar()
-    assert data["table"] == "note"
-    # include-pk setting
-    assert "pk" in data
+    raw, *_ = sess.execute(QUERY).one()
+    assert raw["table"] == "note"
+    # include-pk setting in wal2json output
+    assert "pk" in raw 
 
 
 def test_read_wal_w_visible_to_no_rls(sess):
@@ -150,14 +146,11 @@ def test_read_wal_w_visible_to_no_rls(sess):
     insert_subscriptions(sess)
     clear_wal(sess)
     insert_notes(sess)
-    data = sess.execute(RLS_SLOT).scalar()
-    assert data["table"] == "note"
-    assert "security" in data
-
-    security = data["security"]
-    assert not security["is_rls_enabled"]
+    raw, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
+    assert wal["table"] == "note"
+    assert not is_rls_enabled
     # visible_to includes subscribed user when no rls enabled
-    assert len(security["visible_to"]) == 1
+    assert len(users) == 1
 
 
 def test_read_wal_w_visible_to_has_rls(sess):
@@ -167,23 +160,19 @@ def test_read_wal_w_visible_to_has_rls(sess):
     insert_subscriptions(sess, n=2)
     clear_wal(sess)
     insert_notes(sess, n=1)
-    data = sess.execute(RLS_SLOT).scalar()
-    assert data["table"] == "note"
+    raw, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
+    assert wal["table"] == "note"
 
     # pk info was filtered out
-    assert 'pk' not in data
-
-    assert "security" in data
-
-    security = data["security"]
-    assert security["is_rls_enabled"]
+    assert 'pk' not in wal
+    assert is_rls_enabled
     # 2 permitted users
-    assert len(security["visible_to"]) == 1
+    assert len(users) == 1
     # check user_id
-    assert len(security["visible_to"][0]) > 10
+    assert isinstance(users[0], UUID)
     # check the "dummy" column is not present in the columns due to
     # role secutiry on "authenticated" role
-    columns_in_output = [x["name"] for x in data["columns"]]
+    columns_in_output = [x["name"] for x in wal["columns"]]
     for col in ["id", "user_id", "body"]:
         assert col in columns_in_output
     assert "dummy" not in columns_in_output
@@ -234,8 +223,8 @@ limit 1;
     clear_wal(sess)
 
     insert_notes(sess, n=1, body="bbb")
-    data = sess.execute(RLS_SLOT).scalar()
-    assert len(data["security"]["visible_to"]) == (1 if is_true else 0)
+    raw, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
+    assert len(users) == (1 if is_true else 0)
 
 
 @pytest.mark.performance
@@ -274,7 +263,7 @@ def test_performance_on_n_recs_n_subscribed(sess):
                     """
             explain analyze
             select
-                cdc.wal_rls(data::jsonb)
+                cdc.apply_rls(data::jsonb)
             from
                 pg_logical_slot_peek_changes(
                     'rls_poc', null, null, 
@@ -296,14 +285,14 @@ def test_performance_on_n_recs_n_subscribed(sess):
                 f.write(f"{n_notes}\t{n_subscriptions}\t{exec_time}\n")
 
             # Confirm that the data is correct
-            data = sess.execute(RLS_SLOT).all()
+            data = sess.execute(QUERY).all()
             assert len(data) >= 1
 
             # Accumulate the visible_to person for each change and confirm it matches
             # the number of notes
             all_visible_to = []
-            for (row,) in data:
-                for visible_to in row["security"]["visible_to"]:
+            for (raw, wal, is_rls_enabled, users, errors) in data:
+                for visible_to in users:
                     all_visible_to.append(visible_to)
             try:
                 assert (
