@@ -3,98 +3,163 @@
 
 <a href=""><img src="https://img.shields.io/badge/postgresql-12+-blue.svg" alt="PostgreSQL version" height="18"></a>
 <a href="https://github.com/supabase/wal_rls/blob/master/LICENSE"><img src="https://img.shields.io/pypi/l/markdown-subtemplate.svg" alt="License" height="18"></a>
-<a href="https://github.com/supabase/wal_rls/actions"><img src="https://github.com/supabase/wal_rls/actions/workflows/main.yml/badge.svg" alt="Tests" height="18"></a>
+
 
 </p>
 
 ---
 
-**Source Code**: <a href="https://github.com/supabase/wal_rls" target="_blank">https://github.com/supabase/wal_rls</a>
+**Source Code**: <a href="https://github.com/supabase/walrus" target="_blank">https://github.com/supabase/walrus</a>
 
 ---
+
+Write Ahead Log Realtime Unified Security (WALRUS) is a utility for managing realtime subscriptions to tables and applying row level security rules to those subscriptions.
+
+The subscription stream is based on logical replication slots.
+
 ## Summary
+### Managing Subscriptions
 
-Write Ahead Log Realtime Unified Security (WALRUS) is a tool for applying user defined row level security rules to a PostgreSQL logical replication stream.
+User subscriptions are managed through a table
+
+```sql
+create table cdc.subscription (
+	id bigint not null generated always as identity,
+	user_id uuid not null references auth.users(id),
+	entity regclass not null,
+	filters cdc.user_defined_filter[],
+    created_at timestamp not null default timezone('utc', now()),
+    constraint pk_subscription primary key (id)
+);
+```
+where `cdc.user_defined_filter` is 
+```sql
+create type cdc.user_defined_filter as (
+    column_name text,
+    op cdc.equality_op,
+    value text
+);
+```
+and `cdc.equality_op`s are a subset of [postgrest ops](https://postgrest.org/en/v4.1/api.html#horizontal-filtering-rows). Specifically:
+```sql
+create type cdc.equality_op as enum(
+    'eq', 'neq', 'lt', 'lte', 'gt', 'gte'
+);
+```
+
+For example, to subscribe a user to table named `public.notes` where the `id` is `6`:
+```sql
+insert into cdc.subscription(user_id, entity, filters)
+values ('832bd278-dac7-4bef-96be-e21c8a0023c4', 'public.notes', array[('id', 'eq', '6')]);
+```
 
 
-This repo provides a SQL function `cdc.wal_rls(jsonb)` that post-processes the output of a `wal2json` decoded logical repliaction slot to add the following info
+### Reading WAL
 
+This packagge exposes 1 public SQL function `cdc.apply_rls(jsonb)`. It processes the output of a `wal2json` decoded logical repliaction slot and returns:
+
+- `wal`: (jsonb) The WAL record as JSONB in the form
+- `is_rls_enabled`: (bool) If the entity (table) the WAL record represents has row level security enabled
+- `users`: (uuid[]) An array users who should be notified about the WAL record
+- `errors`: (text[]) An array of errors
+
+The jsonb WAL record is in the following format for inserts, updates, and delete.
 ```json
 {
-    "security": {
-        "is_rls_enabled": true,
-        "visible_to": [
-            "dcd7936b-213c-4efb-b5de-a425f5573027",
-            "6dd09788-758c-4c02-ae1a-81d1d318b056"
-        ]
-    }
+    "schema": "public",
+    "table": "notes",
+    "action": "I",
+    "columns": [
+        {
+            "name": "id",
+            "type": "bigint",
+            "value": 28
+        },
+        {
+            "name": "body",
+            "type": "text",
+            "value": "take out the trash"
+        }
+    ]
 }
 ```
-where `is_rls_enabled` is a `bool` to check if row level security is applied for the current WAL record and `visible_to` is a list of `uuid` representing users who:
+where `action` may be `I`, `U` or `D` for insert, updated, and delete respectively.
 
-- Have permission to view the record accoreding to RLS rules associated with the table
-- Have subscribed to the table that the WAL record came from
-- Have user-defined filters associated with the subscription which do not exclude the record
-
-
+When the WAL record represents a truncate (`action` = `T`) no column information is included e.g.
+```json
+{
+    "schema": "public",
+    "table": "notes",
+    "action": "T"
+}
+```
 ## How it Works
 
-For each subscribed user, ever WAL record is passed into `cdc.wal_rls(jsonb)` which:
+Each WAL record is passed into `cdc.apply_rls(jsonb)` which:
 
-- impersonates that user by setting the current transaction's role to `authenticated` and `request.jwt.claim.sub` to the subcribed user's id
-See 
-
-- queries for the row described by the WAL record using its primary key values to ensure uniqueness and performance
-- Applies user defined filters associated with each user's subscription to the row to remove records were not requested
-- Checks which columns of the WAL record are visible to the `authenticated` role and filters out any 
-
+- impersonates each subscribed user by setting the role to `authenticated` and `request.jwt.claim.sub` to the subcribed user's id
+- queries for the row using its primary key values
+- applies the subscription's filters to check if the WAL record is filtered out
+- filters out all columns that are not visible to the `authenticated` role
 
 ## Usage
 
-### TL;DR
+Given a `wal2json` replication slot with the name `realtime`
+```sql
+select * from pg_create_logical_replication_slot('realtime', 'wal2json')
+```
 
-If you're familiar with logical replication, `pg_logical_slot_get_changes` and `wal2json`:
+The stream can be accessed via 
 
 ```sql
 select
-    cdc.wal_rls(data::jsonb)
+    xyz.wal,
+    xyz.is_rls_enabled,
+    xyz.users,
+    xyz.errors
 from
     pg_logical_slot_get_changes(
-        'realtime_slot', null, null,
+        'realtime',
+        -- Required Config
+        null, null, 
         'include-pk', '1',
         'include-transaction', 'false',
         'format-version', '2',
-        -- TODO: delete + truncate
-        'actions', 'insert,update',
-        'filter-tables', 'cdc.*,auth.*'
-    )
+        'filter-tables', 'cdc.*'
+        -- Optional Config
+        'actions', 'insert,update,delete,truncate',
+    ),
+    lateral (
+        select
+            x.wal,
+            x.is_rls_enabled,
+            x.users,
+            x.errors
+        from
+            cdc.apply_rls(data::jsonb) x(wal, is_rls_enabled, users, errors)
+    ) xyz
 ```
 
-### Explanation
+A complete list of config options can be found [here](https://github.com/eulerto/wal2json):
 
-`pg_logical_get_changes` is a function returning WAL records associated with a logical replication slot (in the example above the slot name is `realtime_slot`).
+## Installation
 
-To create a replication slots, we have to choose an [output plugin](https://wiki.postgresql.org/wiki/Logical_Decoding_Plugins) that will determine the output format. Since 
+The project is SQL only and can be installed by executing the contents of `sql/walrus--0.1.sql` in a database instance.
+## Roadmap
 
-We can create a new replication slot with the 
-```
-select * from pg_create_logical_replication_slot('realtime_slot', 'wal2json')
-```
+### Release Blockers
+- [ ] Filter WAL columns exposed on delete records to include only primary key columns
 
+### Non-blockers
+- [x] Sanitize filters on write
+- [x] Ensure columns referenced by filters exist
+- [x] Ensure filter value is coercable to the column's type
+- [ ] Ensure user defined equality operations are valid for the filters data type
+- [ ] Ensure user has visibility on the column they're filtering (column security)
 
+## Tests
 
-
-
-Currently standalone but will likely be added to supautils for deployment
-
-## Limitations
-
-- No implementation for truncate/delete statement. There are options, just need to pick a strategy  
-- RLS not applied to delete visibility. i.e. everyone sees deletes and their primary key (TODO)
-
-### Run the Tests
-
-Requires:
+Requires
 
 - Python 3.6+
 - Docker 
