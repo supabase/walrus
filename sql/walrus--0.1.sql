@@ -160,41 +160,6 @@ Is Row Level Security enabled for the entity
 $$;
 
 
-create or replace function cdc.build_prepared_statement_sql(
-    prepared_statement_name text,
-	entity regclass,
-	-- primary key column names
-	-- this could be looked up internaly
-	pkey_cols text[],
-	pkey_types text[]
-)
-    returns text
-    language sql
-as $$
-/*
-Builds a sql string that, if executed, creates a prepared statement to 
-tests retrive a row from *entity* by its primary key columns.
-
-Example
-    select cdc.build_prepared_statment_sql('public.notes', '{"id"}'::text[], '{"bigint"}'::text[])
-*/
-	select
-'prepare ' || prepared_statement_name ||'(' || string_agg('text', ', ') || ') as
-select
-	count(*) > 0
-from
-	' || entity || '
-where
-	' || string_agg(quote_ident(col) || '=$' || (col_ix)::text || '::' || type_ , ' and ') || ';'
-	from
-		unnest(pkey_cols) with ordinality pkc(col, col_ix),
-		lateral unnest(pkey_types) with ordinality pkt(type_, type_ix)
-	where
-		col_ix = type_ix
-	group by
-		entity
-$$;
-
 
 create or replace function cdc.cast_to_array_text(arr jsonb)
     returns text[]
@@ -285,14 +250,43 @@ create type cdc.kind as enum('insert', 'update', 'delete');
 
 create type cdc.wal_column as (
     name text,
-    type_ text,
-    value text
+    type text,
+    value text,
+    is_pkey boolean
 );
 
-create type cdc.wal_pkey as (
-    name text,
-    type_ text
-);
+create or replace function cdc.build_prepared_statement_sql(
+    prepared_statement_name text,
+	entity regclass,
+	columns cdc.wal_column[]
+)
+    returns text
+    language sql
+as $$
+/*
+Builds a sql string that, if executed, creates a prepared statement to 
+tests retrive a row from *entity* by its primary key columns.
+
+Example
+    select cdc.build_prepared_statment_sql('public.notes', '{"id"}'::text[], '{"bigint"}'::text[])
+*/
+	select
+'prepare ' || prepared_statement_name || ' as
+select
+	count(*) > 0
+from
+	' || entity || '
+where
+	' || string_agg(quote_ident(pkc.name) || '=' || quote_nullable(pkc.value) , ' and ') || ';'
+	from
+		unnest(columns) pkc
+	where
+        pkc.is_pkey
+	group by
+		entity
+$$;
+
+
 
 create type cdc.wal_rls as (
     wal jsonb,
@@ -370,15 +364,20 @@ declare
     prev_role text = current_setting('role');
     prev_search_path text = current_setting('search_path');
 
-    --columns jsonb = (wal -> 'columns');
-    columns cdc.wal_column[] =
-            array_agg(
+    columns cdc.wal_column[] = 
+        array_agg(
             (
                 x->>'name',
                 x->>'type',
-                x->>'value'
+                x->>'value',
+                (pks ->> 'name') is not null
             )::cdc.wal_column
-        ) from jsonb_array_elements(wal -> 'columns') x;
+            order by (x->'position')::int asc
+        )
+        from
+            jsonb_array_elements(wal -> 'columns') x
+            left join jsonb_array_elements(wal -> 'pk') pks
+                on (x ->> 'name') = (pks ->> 'name');
 
     errors text[] = '{}';
 
@@ -389,19 +388,8 @@ declare
     filters cdc.user_defined_filter[];
     allowed_by_filters boolean;
 
-    pkey_cols text[];
-    pkey_types text[];
-    pkey_vals text[];
-
     prep_stmt_sql text;
-    prep_stmt_executor_sql_template text;
-    prep_stmt_params text[];
-
-    -- Setup a prepared statement for this record
-    prep_stmt_name text = cdc.random_slug(n_chars:=10);
-
 begin
-    raise notice 'asdf %', columns;
     -- Without nulling out search path, casting a table prefixed with a schema that is
     -- contained in the search path will cause the schema to be omitted.
     -- e.g. 'public.post'::reglcass:text -> 'post' (vs 'public.post')
@@ -409,29 +397,10 @@ begin
         set_config('search_path', '', true)
     );
 
-
-    -- Store the primary key column names, types, and values in variables
-    select
-        array_agg(col.name order by pk_ix) pk_names,
-        array_agg(col.type_ order by pk_ix) pk_types,
-        array_agg(col.value order by pk_ix) pk_vals
-    from
-        jsonb_array_elements(wal -> 'pk') with ordinality pks(pk_info, pk_ix),
-        lateral unnest(columns) col
-    where
-        col.name = (pks.pk_info ->> 'name')
-    into
-        pkey_cols, pkey_types, pkey_vals;
-
-
     -- Collect sql string for prepared statment
     -- SQL string that will create a prepared statement to look up current *entity_* using primary key
-    prep_stmt_sql = cdc.build_prepared_statement_sql(prep_stmt_name, entity_, pkey_cols, pkey_types);
+    prep_stmt_sql = cdc.build_prepared_statement_sql('walrus_rls_stmt', entity_, columns);
     execute prep_stmt_sql;
-
-    -- SQL string assembling primary key arguments to execute the prepared statement
-    prep_stmt_executor_sql_template = 'execute %I(' || string_agg('''%s''', ', ') || ')' from generate_series(1,array_length(pkey_vals, 1) );
-    prep_stmt_params = '{}'::text[] || prep_stmt_name || pkey_vals;
 
     -- Set role to "authenticated" outside of hot loop because calls to set_config are expensive
     perform set_config('role', 'authenticated', true);
@@ -450,7 +419,7 @@ begin
                     sum(
                         cdc.check_equality_op(
                             op:=f.op,
-                            type_:=col.type_::regtype,
+                            type_:=col.type::regtype,
                             val_1:=col.value,
                             val_2:=f.value
                         )::int
@@ -473,7 +442,7 @@ begin
                 --perform cdc.impersonate(user_id);
                 perform set_config('request.jwt.claim.sub', user_id::text, true);
                 -- Lookup record by primary key while impersonating *user_id*
-                execute format(prep_stmt_executor_sql_template, variadic prep_stmt_params) into user_has_access;
+                execute 'execute walrus_rls_stmt' into user_has_access;
             else
                 user_has_access = true;
             end if;
@@ -486,7 +455,7 @@ begin
     end loop;
 
     -- Delete the prepared statemetn
-    execute format('deallocate %I', prep_stmt_name);
+    deallocate walrus_rls_stmt;
 
     -- If the "authenticated" role does not have permission to see all columns in the table
     if array_length(selectable_columns, 1) < array_length(columns, 1) then
