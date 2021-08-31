@@ -283,6 +283,17 @@ $$;
 
 create type cdc.kind as enum('insert', 'update', 'delete');
 
+create type cdc.wal_column as (
+    name text,
+    type_ text,
+    value text
+);
+
+create type cdc.wal_pkey as (
+    name text,
+    type_ text
+);
+
 create type cdc.wal_rls as (
     wal jsonb,
     is_rls_enabled boolean,
@@ -359,7 +370,16 @@ declare
     prev_role text = current_setting('role');
     prev_search_path text = current_setting('search_path');
 
-    columns jsonb = (wal -> 'columns');
+    --columns jsonb = (wal -> 'columns');
+    columns cdc.wal_column[] =
+            array_agg(
+            (
+                x->>'name',
+                x->>'type',
+                x->>'value'
+            )::cdc.wal_column
+        ) from jsonb_array_elements(wal -> 'columns') x;
+
     errors text[] = '{}';
 
     -- Internal state tracking 
@@ -381,6 +401,7 @@ declare
     prep_stmt_name text = cdc.random_slug(n_chars:=10);
 
 begin
+    raise notice 'asdf %', columns;
     -- Without nulling out search path, casting a table prefixed with a schema that is
     -- contained in the search path will cause the schema to be omitted.
     -- e.g. 'public.post'::reglcass:text -> 'post' (vs 'public.post')
@@ -391,16 +412,17 @@ begin
 
     -- Store the primary key column names, types, and values in variables
     select
-        array_agg(pks.pk_info ->> 'name' order by pk_ix) pk_names,
-        array_agg(pks.pk_info ->> 'type' order by pk_ix) pk_types,
-        array_agg(cols.col_info ->> 'value' order by pk_ix) pk_vals
+        array_agg(col.name order by pk_ix) pk_names,
+        array_agg(col.type_ order by pk_ix) pk_types,
+        array_agg(col.value order by pk_ix) pk_vals
     from
         jsonb_array_elements(wal -> 'pk') with ordinality pks(pk_info, pk_ix),
-        lateral jsonb_array_elements(columns) cols(col_info)
+        lateral unnest(columns) col
     where
-        (col_info ->> 'name') = (pks.pk_info ->> 'name')
+        col.name = (pks.pk_info ->> 'name')
     into
         pkey_cols, pkey_types, pkey_vals;
+
 
     -- Collect sql string for prepared statment
     -- SQL string that will create a prepared statement to look up current *entity_* using primary key
@@ -428,8 +450,8 @@ begin
                     sum(
                         cdc.check_equality_op(
                             op:=f.op,
-                            type_:=(col_doc ->> 'type')::regtype,
-                            val_1:=(col_doc ->> 'value'),
+                            type_:=col.type_::regtype,
+                            val_1:=col.value,
                             val_2:=f.value
                         )::int
                     ) = count(1),
@@ -437,8 +459,8 @@ begin
                 )
             from 
                 unnest(filters) f
-                join jsonb_array_elements(columns) cols(col_doc)
-                    on f.column_name = (col_doc ->> 'name')
+                join unnest(columns) col
+                    on f.column_name = col.name
             into allowed_by_filters;
         end if;
 
@@ -467,7 +489,7 @@ begin
     execute format('deallocate %I', prep_stmt_name);
 
     -- If the "authenticated" role does not have permission to see all columns in the table
-    if array_length(selectable_columns, 1) < jsonb_array_length(columns) then
+    if array_length(selectable_columns, 1) < array_length(columns, 1) then
 
         -- Filter the columns to only the ones that are visible to "authenticated"
         wal = wal || (
