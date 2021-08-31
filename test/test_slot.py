@@ -18,7 +18,7 @@ from
         'include-pk', '1',
         'include-transaction', 'false',
         'format-version', '2',
-        'actions', 'insert,update,delete',
+        'actions', 'insert,update,delete,truncate',
         'filter-tables', 'cdc.*,auth.*'
     ),
     lateral (
@@ -138,6 +138,8 @@ def test_check_wal2json_settings(sess):
     assert raw["table"] == "note"
     # include-pk setting in wal2json output
     assert "pk" in raw 
+    # column position
+    #assert "position" in raw["columns"][0]
 
 
 def test_read_wal_w_visible_to_no_rls(sess):
@@ -165,6 +167,9 @@ def test_read_wal_w_visible_to_has_rls(sess):
 
     # pk info was filtered out
     assert 'pk' not in wal
+    # position info was filtered out
+    assert "position" not in wal["columns"][0]
+
     assert is_rls_enabled
     # 2 permitted users
     assert len(users) == 1
@@ -176,6 +181,21 @@ def test_read_wal_w_visible_to_has_rls(sess):
     for col in ["id", "user_id", "body"]:
         assert col in columns_in_output
     assert "dummy" not in columns_in_output
+
+def test_wal_truncate(sess):
+    insert_users(sess)
+    setup_note(sess)
+    setup_note_rls(sess)
+    insert_subscriptions(sess, n=2)
+    clear_wal(sess)
+    insert_notes(sess, n=1)
+    clear_wal(sess)
+    sess.execute("truncate table public.note;")
+    sess.commit()
+    raw, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
+    assert wal == {"table": "note", "action": "T", "schema": "public"}
+    assert is_rls_enabled
+    assert len(users) == 2
 
 
 @pytest.mark.parametrize(
@@ -270,7 +290,6 @@ def test_performance_on_n_recs_n_subscribed(sess):
                     'include-pk', '1',
                     'include-transaction', 'false',
                     'format-version', '2',
-                    'actions', 'insert,update,delete',
                     'filter-tables', 'cdc.*,auth.*'
                 )
             """
@@ -286,7 +305,7 @@ def test_performance_on_n_recs_n_subscribed(sess):
 
             # Confirm that the data is correct
             data = sess.execute(QUERY).all()
-            assert len(data) >= 1
+            assert len(data) == n_notes
 
             # Accumulate the visible_to person for each change and confirm it matches
             # the number of notes
@@ -317,6 +336,7 @@ def test_performance_on_n_recs_n_subscribed(sess):
             """
                 )
             )
+            clear_wal(sess)
 
         sess.execute(
             text(

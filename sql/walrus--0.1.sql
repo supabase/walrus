@@ -287,7 +287,6 @@ where
 $$;
 
 
-
 create type cdc.wal_rls as (
     wal jsonb,
     is_rls_enabled boolean,
@@ -346,24 +345,35 @@ Example *change:
 */
 declare
     -- Regclass of the table e.g. public.notes
-	entity_ regclass = (quote_ident(wal ->> 'schema')|| '.' || quote_ident(wal ->> 'table'))::regclass;
+	entity_ regclass = (
+        quote_ident(wal ->> 'schema')
+        || '.'
+        || quote_ident(wal ->> 'table')
+    )::regclass;
 
     -- I, U, D, T: insert, update ...
-    action char;
+    action char = wal ->> 'action';
 
     -- Check if RLS is enabled for the table
     is_rls_enabled bool = cdc.is_rls_enabled(entity_);
 	
 	-- UUIDs of subscribed users who may view the change
+	user_id uuid;
+	user_has_access bool;
 	visible_to_user_ids uuid[] = '{}';
 
     -- Which columns does the "authenticated" role have permission to select (view)
     selectable_columns text[] = cdc.selectable_columns(entity_);
 	
-    -- role and search path at time function is called
-    prev_role text = current_setting('role');
-    prev_search_path text = current_setting('search_path');
-
+    -- user subscriptions to the wal record's table
+    subscriptions cdc.subscription[] =
+            array_agg(sub)
+        from
+            cdc.subscription sub
+        where
+            sub.entity = entity_;
+    
+    -- structured info for wal's columns
     columns cdc.wal_column[] = 
         array_agg(
             (
@@ -372,43 +382,42 @@ declare
                 x->>'value',
                 (pks ->> 'name') is not null
             )::cdc.wal_column
-            order by (x->'position')::int asc
         )
         from
             jsonb_array_elements(wal -> 'columns') x
             left join jsonb_array_elements(wal -> 'pk') pks
                 on (x ->> 'name') = (pks ->> 'name');
 
-    errors text[] = '{}';
-
-    -- Internal state tracking 
-	user_id uuid;
-	user_has_access bool;
-
     filters cdc.user_defined_filter[];
     allowed_by_filters boolean;
-
-    prep_stmt_sql text;
+    errors text[] = '{}';
 begin
-    -- Without nulling out search path, casting a table prefixed with a schema that is
-    -- contained in the search path will cause the schema to be omitted.
-    -- e.g. 'public.post'::reglcass:text -> 'post' (vs 'public.post')
-    perform (
-        set_config('search_path', '', true)
-    );
 
-    -- Collect sql string for prepared statment
-    -- SQL string that will create a prepared statement to look up current *entity_* using primary key
-    prep_stmt_sql = cdc.build_prepared_statement_sql('walrus_rls_stmt', entity_, columns);
-    execute prep_stmt_sql;
+    -- Truncates are considered public
+    if action = 'T' then
+        -- Example wal: {"table": "notes", "action": "T", "schema": "public"}
+        return (
+            wal,
+            is_rls_enabled,
+            -- visible to all subscribers
+            (select array_agg(s.user_id) from unnest(subscriptions) s),
+            -- errors is empty
+            errors
+        )::cdc.wal_rls;
+    end if;
 
-    -- Set role to "authenticated" outside of hot loop because calls to set_config are expensive
+    -- create a prepared statement to check the existence of the wal record by primray key
+    if (select count(*) from pg_prepared_statements where name = 'walrus_rls_stmt') > 0 then
+        deallocate walrus_rls_stmt;
+    end if;
+    execute cdc.build_prepared_statement_sql('walrus_rls_stmt', entity_, columns);
+
+    -- Set role to "authenticated"
     perform set_config('role', 'authenticated', true);
 
     -- For each subscribed user
-    for user_id, filters  in select sub.user_id, sub.filters from cdc.subscription sub where sub.entity = entity_
+    for user_id, filters in select subs.user_id, subs.filters from unnest(subscriptions) subs
     loop
-        
         -- Check if the user defined filters exclude the current record 
         allowed_by_filters = true;
 
@@ -437,11 +446,11 @@ begin
         if allowed_by_filters then
 
             -- Check if the user has access
-            if is_rls_enabled then
-                -- Impersonate the current user
-                --perform cdc.impersonate(user_id);
+            -- Deletes are public
+            if is_rls_enabled and action <> 'D' then
+                -- Impersonate the subscribed user
                 perform set_config('request.jwt.claim.sub', user_id::text, true);
-                -- Lookup record by primary key while impersonating *user_id*
+                -- Lookup record the record as subscribed user
                 execute 'execute walrus_rls_stmt' into user_has_access;
             else
                 user_has_access = true;
@@ -453,9 +462,6 @@ begin
         end if;
 
     end loop;
-
-    -- Delete the prepared statemetn
-    deallocate walrus_rls_stmt;
 
     -- If the "authenticated" role does not have permission to see all columns in the table
     if array_length(selectable_columns, 1) < array_length(columns, 1) then
@@ -473,14 +479,11 @@ begin
                 (col_doc ->> 'name') = any(selectable_columns)
         );
     end if;
-    
-    -- Restore previous configuration
+
     perform (
-        set_config('request.jwt.claim.sub', null, true),
-        set_config('role', prev_role, true),
-        set_config('search_path', prev_search_path, true)
+        set_config('role', null, true)
     );
-    
+
     -- return the change object without primary key info 
 	return (
         (wal #- '{pk}'),
@@ -488,6 +491,5 @@ begin
         visible_to_user_ids,
         errors
     )::cdc.wal_rls;
-	
 end;
 $$;
