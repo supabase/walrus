@@ -24,10 +24,10 @@ User subscriptions are managed through a table
 
 ```sql
 create table cdc.subscription (
-	id bigint not null generated always as identity,
-	user_id uuid not null references auth.users(id),
-	entity regclass not null,
-	filters cdc.user_defined_filter[],
+    id bigint not null generated always as identity,
+    user_id uuid not null references auth.users(id),
+    entity regclass not null,
+    filters cdc.user_defined_filter[],
     created_at timestamp not null default timezone('utc', now()),
     constraint pk_subscription primary key (id)
 );
