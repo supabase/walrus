@@ -96,7 +96,8 @@ create table cdc.subscription (
     -- Format. Equality only {"col_1": "1", "col_2": 4 }
 	filters cdc.user_defined_filter[],
     constraint pk_subscription primary key (id),
-    created_at timestamp not null default timezone('utc', now())
+    created_at timestamp not null default timezone('utc', now()),
+    unique(user_id, entity, filters)
 );
 
 create function cdc.subscription_check_filters()
@@ -128,6 +129,10 @@ begin
         -- raises an exception if value is not coercable to type
         perform format('select %s::%I', filter.value, col_type);
     end loop;
+
+    -- Apply consistent order to filters so the unique constraint on
+    -- (user_id, entity, filters) can't be tricked by a different filter order
+    new.filters = array_agg(f order by f.column_name, f.op, f.value) from unnest(new.filters) f;
 
     return new;
 end;
