@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import sqlalchemy
 from flupy import walk_files
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session

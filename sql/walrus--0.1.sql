@@ -45,7 +45,7 @@ as $$
 /*
 Returns a text array containing the column names in *entity* that *role_* has select access to
 */
-    select 
+    select
         coalesce(
             array_agg(rcg.column_name order by c.ordinal_position),
             '{}'::text[]
@@ -59,7 +59,7 @@ Returns a text array containing the column names in *entity* that *role_* has se
     where
         -- INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
         rcg.privilege_type = 'SELECT'
-        and rcg.grantee = role_ 
+        and rcg.grantee = role_
         and rcg.table_schema = cdc.get_schema_name(entity)
         and rcg.table_name = cdc.get_table_name(entity);
 $$;
@@ -89,15 +89,15 @@ create type cdc.user_defined_filter as (
 
 
 create table cdc.subscription (
-	-- Tracks which users are subscribed to each table
-	id bigint not null generated always as identity,
-	user_id uuid not null references auth.users(id),
-	entity regclass not null,
-    -- Format. Equality only {"col_1": "1", "col_2": 4 }
-	filters cdc.user_defined_filter[],
-    constraint pk_subscription primary key (id),
+    -- Tracks which users are subscribed to each table
+    id bigint not null generated always as identity,
+    user_id uuid not null references auth.users(id),
+    entity regclass not null,
+    filters cdc.user_defined_filter[] not null default '{}',
     created_at timestamp not null default timezone('utc', now()),
-    unique(user_id, entity, filters)
+
+    constraint pk_subscription primary key (id),
+    unique (user_id, entity, filters)
 );
 
 create function cdc.subscription_check_filters()
@@ -125,14 +125,16 @@ begin
         if col_type is null then
             raise exception 'failed to lookup type for column %', filter.column_name;
         end if;
-
         -- raises an exception if value is not coercable to type
         perform format('select %s::%I', filter.value, col_type);
     end loop;
 
     -- Apply consistent order to filters so the unique constraint on
     -- (user_id, entity, filters) can't be tricked by a different filter order
-    new.filters = array_agg(f order by f.column_name, f.op, f.value) from unnest(new.filters) f;
+    new.filters = coalesce(
+        array_agg(f order by f.column_name, f.op, f.value),
+        '{}'
+    ) from unnest(new.filters) f;
 
     return new;
 end;
@@ -219,34 +221,34 @@ $$;
 
 
 create or replace function cdc.check_equality_op(
-	op cdc.equality_op,
-	type_ regtype,
-	val_1 text,
-	val_2 text
+    op cdc.equality_op,
+    type_ regtype,
+    val_1 text,
+    val_2 text
 )
-	returns bool
-	immutable
-	language plpgsql
+    returns bool
+    immutable
+    language plpgsql
 as $$
 /*
 Casts *val_1* and *val_2* as type *type_* and check the *op* condition for truthiness
 */
 declare
-	op_symbol text = (
-		case
-			when op = 'eq' then '='
-			when op = 'neq' then '!='
-			when op = 'lt' then '<'
-			when op = 'lte' then '<='
-			when op = 'gt' then '>'
-			when op = 'gte' then '>='
-			else 'UNKNOWN OP'
-		end
-	);
-	res boolean;
+    op_symbol text = (
+        case
+            when op = 'eq' then '='
+            when op = 'neq' then '!='
+            when op = 'lt' then '<'
+            when op = 'lte' then '<='
+            when op = 'gt' then '>'
+            when op = 'gte' then '>='
+            else 'UNKNOWN OP'
+        end
+    );
+    res boolean;
 begin
-	execute format('select %L::'|| type_::text || ' ' || op_symbol || ' %L::'|| type_::text, val_1, val_2) into res;
-	return res;
+    execute format('select %L::'|| type_::text || ' ' || op_symbol || ' %L::'|| type_::text, val_1, val_2) into res;
+    return res;
 end;
 $$;
 
@@ -262,33 +264,33 @@ create type cdc.wal_column as (
 
 create or replace function cdc.build_prepared_statement_sql(
     prepared_statement_name text,
-	entity regclass,
-	columns cdc.wal_column[]
+    entity regclass,
+    columns cdc.wal_column[]
 )
     returns text
     language sql
 as $$
 /*
-Builds a sql string that, if executed, creates a prepared statement to 
+Builds a sql string that, if executed, creates a prepared statement to
 tests retrive a row from *entity* by its primary key columns.
 
 Example
     select cdc.build_prepared_statment_sql('public.notes', '{"id"}'::text[], '{"bigint"}'::text[])
 */
-	select
+    select
 'prepare ' || prepared_statement_name || ' as
 select
-	count(*) > 0
+    count(*) > 0
 from
-	' || entity || '
+    ' || entity || '
 where
-	' || string_agg(quote_ident(pkc.name) || '=' || quote_nullable(pkc.value) , ' and ') || ';'
-	from
-		unnest(columns) pkc
-	where
+    ' || string_agg(quote_ident(pkc.name) || '=' || quote_nullable(pkc.value) , ' and ') || ';'
+    from
+        unnest(columns) pkc
+    where
         pkc.is_pkey
-	group by
-		entity
+    group by
+        entity
 $$;
 
 
@@ -301,7 +303,7 @@ create type cdc.wal_rls as (
 
 
 create or replace function cdc.apply_rls(wal jsonb)
-    returns cdc.wal_rls 
+    returns cdc.wal_rls
     language plpgsql
     volatile
 as $$
@@ -343,14 +345,14 @@ Example *change:
                     "value": "take out the trash"
                 }
             ],
-            
+
         }
     ]
 }
 */
 declare
     -- Regclass of the table e.g. public.notes
-	entity_ regclass = (
+    entity_ regclass = (
         quote_ident(wal ->> 'schema')
         || '.'
         || quote_ident(wal ->> 'table')
@@ -361,15 +363,15 @@ declare
 
     -- Check if RLS is enabled for the table
     is_rls_enabled bool = cdc.is_rls_enabled(entity_);
-	
-	-- UUIDs of subscribed users who may view the change
-	user_id uuid;
-	user_has_access bool;
-	visible_to_user_ids uuid[] = '{}';
+
+    -- UUIDs of subscribed users who may view the change
+    user_id uuid;
+    user_has_access bool;
+    visible_to_user_ids uuid[] = '{}';
 
     -- Which columns does the "authenticated" role have permission to select (view)
     selectable_columns text[] = cdc.selectable_columns(entity_);
-	
+
     -- user subscriptions to the wal record's table
     subscriptions cdc.subscription[] =
             array_agg(sub)
@@ -377,9 +379,9 @@ declare
             cdc.subscription sub
         where
             sub.entity = entity_;
-    
+
     -- structured info for wal's columns
-    columns cdc.wal_column[] = 
+    columns cdc.wal_column[] =
         array_agg(
             (
                 x->>'name',
@@ -423,11 +425,11 @@ begin
     -- For each subscribed user
     for user_id, filters in select subs.user_id, subs.filters from unnest(subscriptions) subs
     loop
-        -- Check if the user defined filters exclude the current record 
+        -- Check if the user defined filters exclude the current record
         allowed_by_filters = true;
 
         if array_length(filters, 1) > 0 then
-            select 
+            select
                 -- Default to allowed when no filters present
                 coalesce(
                     sum(
@@ -440,7 +442,7 @@ begin
                     ) = count(1),
                     true
                 )
-            from 
+            from
                 unnest(filters) f
                 join unnest(columns) col
                     on f.column_name = col.name
@@ -489,8 +491,8 @@ begin
         set_config('role', null, true)
     );
 
-    -- return the change object without primary key info 
-	return (
+    -- return the change object without primary key info
+    return (
         (wal #- '{pk}'),
         is_rls_enabled,
         visible_to_user_ids,

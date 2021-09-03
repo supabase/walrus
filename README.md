@@ -32,7 +32,7 @@ create table cdc.subscription (
     constraint pk_subscription primary key (id)
 );
 ```
-where `cdc.user_defined_filter` is 
+where `cdc.user_defined_filter` is
 ```sql
 create type cdc.user_defined_filter as (
     column_name text,
@@ -109,7 +109,7 @@ Given a `wal2json` replication slot with the name `realtime`
 select * from pg_create_logical_replication_slot('realtime', 'wal2json')
 ```
 
-The stream can be accessed via 
+The stream can be accessed via
 
 ```sql
 select
@@ -121,7 +121,7 @@ from
     pg_logical_slot_get_changes(
         'realtime',
         -- Required Config
-        null, null, 
+        null, null,
         'include-pk', '1',
         'include-transaction', 'false',
         'format-version', '2',
@@ -162,7 +162,7 @@ The project is SQL only and can be installed by executing the contents of `sql/w
 Requires
 
 - Python 3.6+
-- Docker 
+- Docker
 
 ```shell
 pip intall -e .

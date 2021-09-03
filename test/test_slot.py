@@ -1,11 +1,11 @@
-import os
 from typing import Any, Dict
 from uuid import UUID
 
 import pytest
-from sqlalchemy import column, func, literal, literal_column, select, text
+from sqlalchemy import text
 
-QUERY = text("""
+QUERY = text(
+    """
 select
     data::jsonb,
     xyz.wal,
@@ -14,7 +14,7 @@ select
     xyz.errors
 from
     pg_logical_slot_get_changes(
-        'rls_poc', null, null, 
+        'rls_poc', null, null,
         'include-pk', '1',
         'include-transaction', 'false',
         'format-version', '2',
@@ -30,11 +30,14 @@ from
         from
             cdc.apply_rls(data::jsonb) x(wal, is_rls_enabled, users, errors)
     ) xyz
-""")
+"""
+)
 
 
 def clear_wal(sess):
-    data = sess.execute("select * from pg_logical_slot_get_changes('rls_poc', null, null)").scalar()
+    data = sess.execute(
+        "select * from pg_logical_slot_get_changes('rls_poc', null, null)"
+    ).scalar()
     sess.commit()
 
 
@@ -118,7 +121,6 @@ select id, :body from auth.users order by id limit :n;
     sess.commit()
 
 
-
 def test_read_wal(sess):
     setup_note(sess)
     insert_users(sess)
@@ -137,9 +139,9 @@ def test_check_wal2json_settings(sess):
     raw, *_ = sess.execute(QUERY).one()
     assert raw["table"] == "note"
     # include-pk setting in wal2json output
-    assert "pk" in raw 
+    assert "pk" in raw
     # column position
-    #assert "position" in raw["columns"][0]
+    # assert "position" in raw["columns"][0]
 
 
 def test_read_wal_w_visible_to_no_rls(sess):
@@ -166,7 +168,7 @@ def test_read_wal_w_visible_to_has_rls(sess):
     assert wal["table"] == "note"
 
     # pk info was filtered out
-    assert 'pk' not in wal
+    assert "pk" not in wal
     # position info was filtered out
     assert "position" not in wal["columns"][0]
 
@@ -181,6 +183,7 @@ def test_read_wal_w_visible_to_has_rls(sess):
     for col in ["id", "user_id", "body"]:
         assert col in columns_in_output
     assert "dummy" not in columns_in_output
+
 
 def test_wal_truncate(sess):
     insert_users(sess)
@@ -286,7 +289,7 @@ def test_performance_on_n_recs_n_subscribed(sess):
                 cdc.apply_rls(data::jsonb)
             from
                 pg_logical_slot_peek_changes(
-                    'rls_poc', null, null, 
+                    'rls_poc', null, null,
                     'include-pk', '1',
                     'include-transaction', 'false',
                     'format-version', '2',
