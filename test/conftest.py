@@ -3,11 +3,9 @@ import json
 import os
 import subprocess
 import time
-from pathlib import Path
 from typing import Any
 
 import pytest
-from flupy import walk_files
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
@@ -19,14 +17,7 @@ def dockerize_database():
 
     # Skip if we're using github actions CI
     if not "GITHUB_SHA" in os.environ:
-        subprocess.call(
-            [
-                "docker",
-                "compose",
-                "up",
-                "-d"
-            ]
-        )
+        subprocess.call(["docker", "compose", "up", "-d"])
         # Wait for postgres to become healthy
         for _ in range(10):
             print(1)

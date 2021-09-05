@@ -17,7 +17,7 @@ services:
       test: ["CMD-SHELL", "PGUSER=postgres", "pg_isready"]
       interval: 1s
       timeout: 10s
-      retries: 5 
+      retries: 5
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
