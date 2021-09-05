@@ -190,13 +190,36 @@ def test_wal_truncate(sess):
     setup_note(sess)
     setup_note_rls(sess)
     insert_subscriptions(sess, n=2)
-    clear_wal(sess)
     insert_notes(sess, n=1)
     clear_wal(sess)
     sess.execute("truncate table public.note;")
     sess.commit()
     raw, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
     assert wal == {"table": "note", "action": "T", "schema": "public"}
+    assert is_rls_enabled
+    assert len(users) == 2
+
+
+def test_wal_delete(sess):
+    insert_users(sess)
+    setup_note(sess)
+    setup_note_rls(sess)
+    insert_subscriptions(sess, n=2)
+    insert_notes(sess, n=1)
+    clear_wal(sess)
+    sess.execute("delete from public.note;")
+    sess.commit()
+    raw, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
+    import pdb
+
+    pdb.set_trace()
+    assert wal == {
+        "action": "D",
+        "schema": "public",
+        "table": "note",
+        "identity": [{"name": "id", "value": 1, "type": "bigint"}],
+    }
+
     assert is_rls_enabled
     assert len(users) == 2
 

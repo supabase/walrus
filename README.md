@@ -63,7 +63,7 @@ This package exposes 1 public SQL function `cdc.apply_rls(jsonb)`. It processes 
 - `users`: (uuid[]) An array users who should be notified about the WAL record
 - `errors`: (text[]) An array of errors
 
-The jsonb WAL record is in the following format for inserts, updates, and delete.
+The jsonb WAL record is in the following format for inserts and updates.
 ```json
 {
     "schema": "public",
@@ -83,9 +83,9 @@ The jsonb WAL record is in the following format for inserts, updates, and delete
     ]
 }
 ```
-where `action` may be `I`, `U` or `D` for insert, updated, and delete respectively.
+where `action` may be `I` or `U` for insert, updated, and delete respectively.
 
-When the WAL record represents a truncate (`action` = `T`) no column information is included e.g.
+When the WAL record represents a truncate (`action` = `T`) no column information is included and it should be sent to all subscribed users, regardless of their user defined filters e.g.
 ```json
 {
     "schema": "public",
@@ -93,6 +93,29 @@ When the WAL record represents a truncate (`action` = `T`) no column information
     "action": "T"
 }
 ```
+
+For deletes (`action` = `D`)
+- Only identity column data is included in an `identity` field
+- Row level security is not applied
+- User defined filters are only applied if they filter on identity columns
+
+Since row level security is not applied, data composing a table's identity should be considered public.
+e.g.
+```json
+{
+        "schema": "public",
+        "table": "note",
+        "action": "D",
+        "identity": [
+            {
+                "name": "id",
+                "type": "bigint",
+                "value": 1
+            }
+        ]
+    }
+```
+
 ## How it Works
 
 Each WAL record is passed into `cdc.apply_rls(jsonb)` which:
@@ -148,14 +171,14 @@ The project is SQL only and can be installed by executing the contents of `sql/w
 ## Roadmap
 
 ### Release Blockers
-- [ ] Filter WAL columns exposed on delete records to include only primary key columns
+- [x] Filter WAL columns exposed on delete records to include only identity columns
 
 ### Non-blockers
 - [x] Sanitize filters on write
 - [x] Ensure columns referenced by filters exist
 - [x] Ensure filter value is coercable to the column's type
 - [ ] Ensure user defined equality operations are valid for the filters data type
-- [ ] Ensure user has visibility on the column they're filtering (column security)
+- [x] Ensure user has visibility on the column they're filtering (column security)
 
 ## Tests
 
