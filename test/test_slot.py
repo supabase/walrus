@@ -210,9 +210,6 @@ def test_wal_delete(sess):
     sess.execute("delete from public.note;")
     sess.commit()
     raw, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
-    import pdb
-
-    pdb.set_trace()
     assert wal == {
         "action": "D",
         "schema": "public",
