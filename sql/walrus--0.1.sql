@@ -302,6 +302,35 @@ create type cdc.wal_rls as (
 );
 
 
+
+create or replace function cdc.is_visible_through_filters(columns cdc.wal_column[], filters cdc.user_defined_filter[])
+    returns bool
+    language sql
+    immutable
+as $$
+/*
+Should the record be visible (true) or filtered out (false) after *filters* are applied
+*/
+    select
+        -- Default to allowed when no filters present
+        coalesce(
+            sum(
+                cdc.check_equality_op(
+                    op:=f.op,
+                    type_:=col.type::regtype,
+                    val_1:=col.value,
+                    val_2:=f.value
+                )::int
+            ) = count(1),
+            true
+        )
+    from
+        unnest(filters) f
+        join unnest(columns) col
+            on f.column_name = col.name;
+$$;
+
+
 create or replace function cdc.apply_rls(wal jsonb)
     returns cdc.wal_rls
     language plpgsql
@@ -315,7 +344,7 @@ Append keys describing user visibility to each change
     "is_rls_enabled": true,
 }
 
-Example *change:
+Example *change*:
 {
     "change": [
         {
@@ -413,6 +442,28 @@ begin
         )::cdc.wal_rls;
     end if;
 
+    -- Deletes are public but only expose primary key info
+    if action = 'D' then
+        -- Example wal input: {"action":"D","schema":"public","table":"notes","identity":[{"name":"id","type":"bigint","value":1}],"pk":[{"name":"id","type":"bigint"}]}
+        -- Filters may have been applied to
+        for user_id, filters in select subs.user_id, subs.filters from unnest(subscriptions) subs
+        loop
+            -- Check if filters exclude the record
+            allowed_by_filters = cdc.is_visible_through_filters(columns, filters);
+            if allowed_by_filters then
+                visible_to_user_ids = visible_to_user_ids || user_id;
+            end if;
+        end loop;
+
+        return (
+            -- Remove 'pk'
+            (wal #- '{pk}'),
+            is_rls_enabled,
+            visible_to_user_ids,
+            errors
+        )::cdc.wal_rls;
+    end if;
+
     -- create a prepared statement to check the existence of the wal record by primray key
     if (select count(*) from pg_prepared_statements where name = 'walrus_rls_stmt') > 0 then
         deallocate walrus_rls_stmt;
@@ -426,28 +477,7 @@ begin
     for user_id, filters in select subs.user_id, subs.filters from unnest(subscriptions) subs
     loop
         -- Check if the user defined filters exclude the current record
-        allowed_by_filters = true;
-
-        if array_length(filters, 1) > 0 then
-            select
-                -- Default to allowed when no filters present
-                coalesce(
-                    sum(
-                        cdc.check_equality_op(
-                            op:=f.op,
-                            type_:=col.type::regtype,
-                            val_1:=col.value,
-                            val_2:=f.value
-                        )::int
-                    ) = count(1),
-                    true
-                )
-            from
-                unnest(filters) f
-                join unnest(columns) col
-                    on f.column_name = col.name
-            into allowed_by_filters;
-        end if;
+        allowed_by_filters = cdc.is_visible_through_filters(columns, filters);
 
         -- If the user defined filters did not exclude the record
         if allowed_by_filters then
