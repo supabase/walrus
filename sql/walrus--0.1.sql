@@ -92,6 +92,8 @@ create table cdc.subscription (
     -- Tracks which users are subscribed to each table
     id bigint not null generated always as identity,
     user_id uuid not null references auth.users(id),
+    -- Populated automatically by trigger. Required to enable auth.email()
+    email varchar(255),
     entity regclass not null,
     filters cdc.user_defined_filter[] not null default '{}',
     created_at timestamp not null default timezone('utc', now()),
@@ -127,6 +129,9 @@ begin
         end if;
         -- raises an exception if value is not coercable to type
         perform format('select %s::%I', filter.value, col_type);
+
+        -- Avoids the 'authenticated' role requiring access to auth.users
+        new.email = (select u.email from auth.users u where u.id = new.user_id);
     end loop;
 
     -- Apply consistent order to filters so the unique constraint on
@@ -395,6 +400,7 @@ declare
 
     -- UUIDs of subscribed users who may view the change
     user_id uuid;
+    email varchar(255);
     user_has_access bool;
     visible_to_user_ids uuid[] = '{}';
 
@@ -471,10 +477,12 @@ begin
     execute cdc.build_prepared_statement_sql('walrus_rls_stmt', entity_, columns);
 
     -- Set role to "authenticated"
-    perform set_config('role', 'authenticated', true);
+    perform
+        set_config('role', 'authenticated', true),
+        set_config('request.jwt.claim.role', 'authenticated', true);
 
     -- For each subscribed user
-    for user_id, filters in select subs.user_id, subs.filters from unnest(subscriptions) subs
+    for user_id, email, filters in select subs.user_id, subs.email, subs.filters from unnest(subscriptions) subs
     loop
         -- Check if the user defined filters exclude the current record
         allowed_by_filters = cdc.is_visible_through_filters(columns, filters);
@@ -486,7 +494,9 @@ begin
             -- Deletes are public
             if is_rls_enabled and action <> 'D' then
                 -- Impersonate the subscribed user
-                perform set_config('request.jwt.claim.sub', user_id::text, true);
+                perform
+                    set_config('request.jwt.claim.sub', user_id::text, true),
+                    set_config('request.jwt.claim.email', email::text, true);
                 -- Lookup record the record as subscribed user
                 execute 'execute walrus_rls_stmt' into user_has_access;
             else
