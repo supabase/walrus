@@ -56,7 +56,7 @@ values ('832bd278-dac7-4bef-96be-e21c8a0023c4', 'public.notes', array[('id', 'eq
 
 ### Reading WAL
 
-This packagge exposes 1 public SQL function `cdc.apply_rls(jsonb)`. It processes the output of a `wal2json` decoded logical repliaction slot and returns:
+This package exposes 1 public SQL function `cdc.apply_rls(jsonb)`. It processes the output of a `wal2json` decoded logical repliaction slot and returns:
 
 - `wal`: (jsonb) The WAL record as JSONB in the form
 - `is_rls_enabled`: (bool) If the entity (table) the WAL record represents has row level security enabled
@@ -125,9 +125,9 @@ from
         'include-pk', '1',
         'include-transaction', 'false',
         'format-version', '2',
-        'filter-tables', 'cdc.*'
+        'filter-tables', 'cdc.*',
         -- Optional Config
-        'actions', 'insert,update,delete,truncate',
+        'actions', 'insert,update,delete,truncate'
     ),
     lateral (
         select
@@ -165,9 +165,11 @@ Requires
 - Docker
 
 ```shell
-pip intall -e .
+pip install -e .
 
 docker build -t pg_wal_rls -f Dockerfile .
+
+docker run -e POSTGRES_PASSWORD=postgres pg_wal_rls
 
 pytest
 ```
