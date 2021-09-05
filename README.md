@@ -103,17 +103,17 @@ Since row level security is not applied, data composing a table's identity shoul
 e.g.
 ```json
 {
-        "schema": "public",
-        "table": "note",
-        "action": "D",
-        "identity": [
-            {
-                "name": "id",
-                "type": "bigint",
-                "value": 1
-            }
-        ]
-    }
+    "schema": "public",
+    "table": "note",
+    "action": "D",
+    "identity": [
+        {
+            "name": "id",
+            "type": "bigint",
+            "value": 1
+        }
+    ]
+}
 ```
 
 ## How it Works
