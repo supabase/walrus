@@ -11,10 +11,7 @@ from flupy import walk_files
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
-CONTAINER_NAME = "wal_rls_dev"
-IMAGE_NAME = "pg_wal_rls"
-DB_NAME = "gqldb"
-PORT = 5403
+CONTAINER_NAME = "wal_rls_db_1"
 
 
 @pytest.fixture(scope="session")
@@ -25,32 +22,14 @@ def dockerize_database():
         subprocess.call(
             [
                 "docker",
-                "run",
-                "--rm",
-                "--name",
-                CONTAINER_NAME,
-                "-p",
-                f"{PORT}:5432",
-                "-d",
-                "-e",
-                f"POSTGRES_DB={DB_NAME}",
-                "-e",
-                "POSTGRES_PASSWORD=password",
-                "-e",
-                "POSTGRES_USER=postgres",
-                "--health-cmd",
-                "pg_isready",
-                "--health-interval",
-                "3s",
-                "--health-timeout",
-                "3s",
-                "--health-retries",
-                "15",
-                IMAGE_NAME,
+                "compose",
+                "up",
+                "-d"
             ]
         )
         # Wait for postgres to become healthy
         for _ in range(10):
+            print(1)
             out = subprocess.check_output(["docker", "inspect", CONTAINER_NAME])
             container_info = json.loads(out)
             container_health_status = container_info[0]["State"]["Health"]["Status"]
@@ -61,22 +40,14 @@ def dockerize_database():
         else:
             raise Exception("Container never became healthy")
         yield
-        subprocess.call(["docker", "stop", CONTAINER_NAME])
+        subprocess.call(["docker", "compose", "down", "-v"])
         return
     yield
 
 
 @pytest.fixture(scope="session")
 def engine(dockerize_database):
-    eng = create_engine(f"postgresql://postgres:password@localhost:{PORT}/{DB_NAME}")
-
-    for str_path in walk_files("sql"):
-        path = Path(str_path)
-        contents = path.read_text()
-        with eng.connect() as conn:
-            conn.execute(text(contents))
-            conn.execute(text("commit"))
-
+    eng = create_engine(f"postgresql://postgres:postgres@localhost:5432/postgres")
     yield eng
     eng.dispose()
 
