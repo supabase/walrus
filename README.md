@@ -192,7 +192,5 @@ pip install -e .
 
 docker build -t pg_wal_rls -f Dockerfile .
 
-docker run -e POSTGRES_PASSWORD=postgres pg_wal_rls
-
 pytest
 ```
