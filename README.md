@@ -194,3 +194,7 @@ docker build -t pg_wal_rls -f Dockerfile .
 
 pytest
 ```
+
+## RFC Process
+
+To open an request for comment (RFC), open a [github issue against this repo and select the RFC template](https://github.com/supabase/walrus/issues/new/choose).
