@@ -1,7 +1,7 @@
 ---
-name: RFC Template
+name: RFC
 about: Request for Comment
-title: "[RFC]"
+title: ''
 labels: ''
 assignees: ''
 
