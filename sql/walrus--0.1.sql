@@ -129,9 +129,6 @@ begin
         end if;
         -- raises an exception if value is not coercable to type
         perform format('select %s::%I', filter.value, col_type);
-
-        -- Avoids the 'authenticated' role requiring access to auth.users
-        new.email = (select u.email from auth.users u where u.id = new.user_id);
     end loop;
 
     -- Apply consistent order to filters so the unique constraint on
@@ -140,6 +137,9 @@ begin
         array_agg(f order by f.column_name, f.op, f.value),
         '{}'
     ) from unnest(new.filters) f;
+
+    -- Avoids the 'authenticated' role requiring access to auth.users
+    new.email = (select u.email from auth.users u where u.id = new.user_id);
 
     return new;
 end;
