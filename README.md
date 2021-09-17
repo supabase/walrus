@@ -83,7 +83,7 @@ The jsonb WAL record is in the following format for inserts and updates.
     ]
 }
 ```
-where `action` may be `I` or `U` for insert, updated, and delete respectively.
+where `action` may be `I` or `U` for insert and updated, respectively.
 
 When the WAL record represents a truncate (`action` = `T`) no column information is included and it should be sent to all subscribed users, regardless of their user defined filters e.g.
 ```json
