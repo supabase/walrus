@@ -9,7 +9,7 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
-CONTAINER_NAME = "wal_rls_db_1"
+CONTAINER_NAME = "walrus_db_1"
 
 
 @pytest.fixture(scope="session")
@@ -25,6 +25,7 @@ def dockerize_database():
             container_info = json.loads(out)
             container_health_status = container_info[0]["State"]["Health"]["Status"]
             if container_health_status == "healthy":
+                time.sleep(1)
                 break
             else:
                 time.sleep(1)
@@ -48,7 +49,31 @@ def sess(engine):
 
     conn = engine.connect()
     conn.execute(
-        text("select * from pg_create_logical_replication_slot('rls_poc', 'wal2json')")
+        text(
+            """
+select * from pg_create_logical_replication_slot('rls_poc', 'wal2json');
+
+create or replace function benchmark(sql text, n int)
+  returns interval
+  language plpgsql AS
+$$
+/*
+	Benchmark an idempotent SQL statement
+*/
+declare
+   i int;
+   start_time timestamp;
+begin
+    start_time := clock_timestamp();
+	for i in 1 .. n loop
+		-- UNSAFE
+		execute sql;
+	end loop;
+	return (clock_timestamp() - start_time) / n;
+end
+$$;
+            """
+        )
     )
     conn.execute(text("commit"))
     # Bind a session to the top level transaction

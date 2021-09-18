@@ -8,42 +8,18 @@ grant usage on schema cdc to postgres;
 grant usage on schema cdc to authenticated;
 
 
-create or replace function cdc.get_schema_name(entity regclass)
-returns text
-immutable
-language sql
-as $$
-    SELECT nspname::text
-    FROM pg_catalog.pg_class AS c
-    JOIN pg_catalog.pg_namespace AS ns
-      ON c.relnamespace = ns.oid
-    WHERE c.oid = entity;
-$$;
-
-
-create or replace function cdc.get_table_name(entity regclass)
-returns text
-immutable
-language sql
-as $$
-    SELECT c.relname::text
-    FROM pg_catalog.pg_class AS c
-    JOIN pg_catalog.pg_namespace AS ns
-      ON c.relnamespace = ns.oid
-    WHERE c.oid = entity;
-$$;
-
-
 create or replace function cdc.selectable_columns(
     entity regclass,
     role_ text default 'authenticated'
 )
 returns text[]
 language sql
-stable
+immutable
 as $$
 /*
 Returns a text array containing the column names in *entity* that *role_* has select access to
+
+TODO: Refactor to remove use in favor of pg_catalog.has_column_privilege('authenticated', entity_, x->>'name', 'SELECT')
 */
     select
         coalesce(
@@ -60,14 +36,15 @@ Returns a text array containing the column names in *entity* that *role_* has se
         -- INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
         rcg.privilege_type = 'SELECT'
         and rcg.grantee = role_
-        and rcg.table_schema = cdc.get_schema_name(entity)
-        and rcg.table_name = cdc.get_table_name(entity);
+        --and rcg.table_name = entity;
+        and (rcg.table_schema || '.' || rcg.table_name)::regclass = entity;
 $$;
 
 
 create or replace function cdc.get_column_type(entity regclass, column_name text)
     returns regtype
     language sql
+    immutable
 as $$
     select atttypid::regtype
     from pg_catalog.pg_attribute
@@ -213,18 +190,6 @@ Example:
 $$;
 
 
-create or replace function cdc.random_slug(n_chars int default 10)
-    returns text
-    language sql
-    volatile
-as $$
-/*
-Random string of *n_chars* length that is valid as a sql identifier without quoting
-*/
-  select string_agg(chr((ascii('a') + round(random() * 25))::int), '') from generate_series(1, n_chars)
-$$;
-
-
 create or replace function cdc.check_equality_op(
     op cdc.equality_op,
     type_ regtype,
@@ -264,7 +229,8 @@ create type cdc.wal_column as (
     name text,
     type text,
     value text,
-    is_pkey boolean
+    is_pkey boolean,
+    is_selectable boolean
 );
 
 create or replace function cdc.build_prepared_statement_sql(
@@ -341,56 +307,9 @@ create or replace function cdc.apply_rls(wal jsonb)
     language plpgsql
     volatile
 as $$
-/*
-Append keys describing user visibility to each change
-
-"security": {
-    "visible_to": ["31b93c49-5435-42bf-97c4-375f207824d4"],
-    "is_rls_enabled": true,
-}
-
-Example *change*:
-{
-    "change": [
-        {
-            "pk": [
-                {
-                    "name": "id",
-                    "type": "bigint"
-                }
-            ],
-            "table": "notes",
-            "action": "I",
-            "schema": "public",
-            "columns": [
-                {
-                    "name": "id",
-                    "type": "bigint",
-                    "value": 28
-                },
-                {
-                    "name": "user_id",
-                    "type": "uuid",
-                    "value": "31b93c49-5435-42bf-97c4-375f207824d4"
-                },
-                {
-                    "name": "body",
-                    "type": "text",
-                    "value": "take out the trash"
-                }
-            ],
-
-        }
-    ]
-}
-*/
 declare
     -- Regclass of the table e.g. public.notes
-    entity_ regclass = (
-        quote_ident(wal ->> 'schema')
-        || '.'
-        || quote_ident(wal ->> 'table')
-    )::regclass;
+    entity_ regclass = (quote_ident(wal ->> 'schema') || '.' || quote_ident(wal ->> 'table'))::regclass;
 
     -- I, U, D, T: insert, update ...
     action char = wal ->> 'action';
@@ -404,8 +323,6 @@ declare
     user_has_access bool;
     visible_to_user_ids uuid[] = '{}';
 
-    -- Which columns does the "authenticated" role have permission to select (view)
-    selectable_columns text[] = cdc.selectable_columns(entity_);
 
     -- user subscriptions to the wal record's table
     subscriptions cdc.subscription[] =
@@ -422,13 +339,18 @@ declare
                 x->>'name',
                 x->>'type',
                 x->>'value',
-                (pks ->> 'name') is not null
+                (pks ->> 'name') is not null,
+                pg_catalog.has_column_privilege('authenticated', entity_, x->>'name', 'SELECT')
             )::cdc.wal_column
         )
         from
             jsonb_array_elements(wal -> 'columns') x
             left join jsonb_array_elements(wal -> 'pk') pks
                 on (x ->> 'name') = (pks ->> 'name');
+
+    -- Which columns does the "authenticated" role have permission to select (view)
+    -- TODO Refactor to remove this var in favor of columns.is_selectable
+    selectable_columns text[] = array_agg(x.name) from unnest(columns) x where x.is_selectable;
 
     filters cdc.user_defined_filter[];
     allowed_by_filters boolean;
