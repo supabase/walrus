@@ -7,40 +7,6 @@ create schema cdc;
 grant usage on schema cdc to postgres;
 grant usage on schema cdc to authenticated;
 
-
-create or replace function cdc.selectable_columns(
-    entity regclass,
-    role_ text default 'authenticated'
-)
-returns text[]
-language sql
-immutable
-as $$
-/*
-Returns a text array containing the column names in *entity* that *role_* has select access to
-
-TODO: Refactor to remove use in favor of pg_catalog.has_column_privilege('authenticated', entity_, x->>'name', 'SELECT')
-*/
-    select
-        coalesce(
-            array_agg(rcg.column_name order by c.ordinal_position),
-            '{}'::text[]
-        )
-    from
-        information_schema.role_column_grants rcg
-        inner join information_schema.columns c
-            on rcg.table_schema = c.table_schema
-            and rcg.table_name = c.table_name
-            and rcg.column_name = c.column_name
-    where
-        -- INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
-        rcg.privilege_type = 'SELECT'
-        and rcg.grantee = role_
-        --and rcg.table_name = entity;
-        and (rcg.table_schema || '.' || rcg.table_name)::regclass = entity;
-$$;
-
-
 create or replace function cdc.get_column_type(entity regclass, column_name text)
     returns regtype
     language sql
@@ -76,8 +42,9 @@ create table cdc.subscription (
     created_at timestamp not null default timezone('utc', now()),
 
     constraint pk_subscription primary key (id),
-    unique (user_id, entity, filters)
+    unique (entity, user_id, filters)
 );
+create index ix_cdc_subscription_entity on cdc.subscription using hash (entity);
 
 create function cdc.subscription_check_filters()
     returns trigger
@@ -89,7 +56,20 @@ Validates that the user defined filters for a subscription:
 - values are coercable to the correct column type
 */
 declare
-    col_names text[] = cdc.selectable_columns(new.entity);
+    col_names text[] = coalesce(
+            array_agg(c.column_name order by c.ordinal_position),
+            '{}'::text[]
+        )
+        from information_schema.columns c
+        where
+            (c.table_schema || '.' || c.table_name)::regclass = new.entity
+            and pg_catalog.has_column_privilege(
+                'authenticated',
+                new.entity,
+                c.column_name,
+                'SELECT'
+        );
+
     filter cdc.user_defined_filter;
     col_type text;
 begin
@@ -149,47 +129,6 @@ Is Row Level Security enabled for the entity
 $$;
 
 
-
-create or replace function cdc.cast_to_array_text(arr jsonb)
-    returns text[]
-    language 'sql'
-    stable
-as $$
-/*
-Cast an jsonb array of text to a native postgres array of text
-
-Example:
-    select cdc.cast_to_array_text('{"hello", "world"}'::jsonb)
-*/
-    select
-        array_agg(xyz.v)
-    from
-        jsonb_array_elements_text(
-            case
-                when jsonb_typeof(arr) = 'array' then arr
-                else '[]'::jsonb
-            end
-        ) xyz(v)
-$$;
-
-create or replace function cdc.cast_to_jsonb_array_text(arr text[])
-    returns jsonb
-    language 'sql'
-    stable
-as $$
-/*
-Cast an jsonb array of text to a native postgres array of text
-
-Example:
-    select cdc.cast_to_jsonb_array_text('{"hello", "world"}'::text[])
-*/
-    select
-        coalesce(jsonb_agg(xyz.v), '{}'::jsonb)
-    from
-        unnest(arr) xyz(v);
-$$;
-
-
 create or replace function cdc.check_equality_op(
     op cdc.equality_op,
     type_ regtype,
@@ -222,8 +161,6 @@ begin
 end;
 $$;
 
-
-create type cdc.kind as enum('insert', 'update', 'delete');
 
 create type cdc.wal_column as (
     name text,
@@ -393,7 +330,7 @@ begin
     end if;
 
     -- create a prepared statement to check the existence of the wal record by primray key
-    if (select count(*) from pg_prepared_statements where name = 'walrus_rls_stmt') > 0 then
+    if (select 1 from pg_prepared_statements where name = 'walrus_rls_stmt' limit 1) > 0 then
         deallocate walrus_rls_stmt;
     end if;
     execute cdc.build_prepared_statement_sql('walrus_rls_stmt', entity_, columns);

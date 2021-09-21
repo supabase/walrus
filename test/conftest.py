@@ -17,7 +17,7 @@ def dockerize_database():
 
     # Skip if we're using github actions CI
     if not "GITHUB_SHA" in os.environ:
-        subprocess.call(["docker", "compose", "up", "-d"])
+        subprocess.call(["docker-compose", "up", "-d"])
         # Wait for postgres to become healthy
         for _ in range(10):
             print(1)
@@ -32,7 +32,7 @@ def dockerize_database():
         else:
             raise Exception("Container never became healthy")
         yield
-        subprocess.call(["docker", "compose", "down", "-v"])
+        subprocess.call(["docker-compose", "down", "-v"])
         return
     yield
 
