@@ -62,7 +62,7 @@ declare
         )
         from information_schema.columns c
         where
-            (c.table_schema || '.' || c.table_name)::regclass = new.entity
+            (quote_ident(c.table_schema) || '.' || quote_ident(c.table_name))::regclass = new.entity
             and pg_catalog.has_column_privilege(
                 'authenticated',
                 new.entity,
