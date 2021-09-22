@@ -36,7 +36,7 @@ What are the negative trade-offs?
 # Alternatives
 [alternatives]: #alternatives
 
-What other solutions have been considered? 
+What other solutions have been considered?
 
 # Unresolved Questions
 [unresolved]: #unresolved-questions
