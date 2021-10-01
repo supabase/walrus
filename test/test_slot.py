@@ -17,6 +17,8 @@ from
         'rls_poc', null, null,
         'include-pk', '1',
         'include-transaction', 'false',
+        'include-timestamp', 'true',
+        'write-in-chunks', 'true',
         'format-version', '2',
         'actions', 'insert,update,delete,truncate',
         'filter-tables', 'cdc.*,auth.*'
@@ -164,6 +166,9 @@ def test_read_wal_w_visible_to_has_rls(sess):
     insert_subscriptions(sess, n=2)
     clear_wal(sess)
     insert_notes(sess, n=1)
+    import pdb
+
+    pdb.set_trace()
     raw, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
     assert wal["table"] == "note"
 
@@ -195,7 +200,14 @@ def test_wal_truncate(sess):
     sess.execute("truncate table public.note;")
     sess.commit()
     raw, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
-    assert wal == {"table": "note", "action": "T", "schema": "public"}
+    for key, value in {
+        "table": "note",
+        "action": "TRUNCATE",
+        "schema": "public",
+    }.items():
+        assert wal[key] == value
+    assert wal["commit_timestamp"].startswith("2")
+
     assert is_rls_enabled
     assert len(users) == 2
 
@@ -210,12 +222,14 @@ def test_wal_delete(sess):
     sess.execute("delete from public.note;")
     sess.commit()
     raw, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
-    assert wal == {
-        "action": "D",
+    for key, value in {
+        "action": "DELETE",
         "schema": "public",
         "table": "note",
         "identity": [{"name": "id", "value": 1, "type": "bigint"}],
-    }
+    }.items():
+        assert wal[key] == value
+    assert wal["commit_timestamp"].startswith("2")
 
     assert is_rls_enabled
     assert len(users) == 2

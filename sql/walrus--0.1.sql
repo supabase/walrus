@@ -24,6 +24,8 @@ create type cdc.equality_op as enum(
     'eq', 'neq', 'lt', 'lte', 'gt', 'gte'
 );
 
+create type cdc.action as enum ('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'ERROR');
+
 create type cdc.user_defined_filter as (
     column_name text,
     op cdc.equality_op,
@@ -238,7 +240,6 @@ Should the record be visible (true) or filtered out (false) after *filters* are 
             on f.column_name = col.name;
 $$;
 
-
 create or replace function cdc.apply_rls(wal jsonb)
     returns cdc.wal_rls
     language plpgsql
@@ -249,7 +250,15 @@ declare
     entity_ regclass = (quote_ident(wal ->> 'schema') || '.' || quote_ident(wal ->> 'table'))::regclass;
 
     -- I, U, D, T: insert, update ...
-    action char = wal ->> 'action';
+    action cdc.action = (
+        case wal ->> 'action'
+            when 'I' then 'INSERT'
+            when 'U' then 'UPDATE'
+            when 'D' then 'DELETE'
+            when 'T' then 'TRUNCATE'
+            else 'ERROR'
+        end
+    );
 
     -- Check if RLS is enabled for the table
     is_rls_enabled bool = cdc.is_rls_enabled(entity_);
@@ -259,7 +268,6 @@ declare
     email varchar(255);
     user_has_access bool;
     visible_to_user_ids uuid[] = '{}';
-
 
     -- user subscriptions to the wal record's table
     subscriptions cdc.subscription[] =
@@ -294,8 +302,22 @@ declare
     errors text[] = '{}';
 begin
 
+    wal = (
+        wal
+        -- Replace action key with full word of action e.g. I -> INSERT
+        || jsonb_build_object(
+            'action', action,
+            -- Copy "timestamp" key to "commit_timestamp"
+            'commit_timestamp', wal ->> 'timestamp'
+        )
+        -- Remove "timestamp" key
+        #- '{timestamp}'
+        -- Remove "pk" key
+        #- '{pk}'
+    );
+
     -- Truncates are considered public
-    if action = 'T' then
+    if action = 'TRUNCATE' then
         -- Example wal: {"table": "notes", "action": "T", "schema": "public"}
         return (
             wal,
@@ -307,8 +329,23 @@ begin
         )::cdc.wal_rls;
     end if;
 
+    /*
+    -- Add "record" key with
+        || jsonb_build_object(
+            ''
+        )
+        -- Create a "record" key with column_name -> value pairs
+    select
+    jsonb_object_agg(
+        col ->> 'name', col ->> 'value'
+    )
+from
+    xyz,
+    jsonb_path_query(dat, '$.columns[*]') col
+    */
+
     -- Deletes are public but only expose primary key info
-    if action = 'D' then
+    if action = 'DELETE' then
         -- Example wal input: {"action":"D","schema":"public","table":"notes","identity":[{"name":"id","type":"bigint","value":1}],"pk":[{"name":"id","type":"bigint"}]}
         -- Filters may have been applied to
         for user_id, filters in select subs.user_id, subs.filters from unnest(subscriptions) subs
@@ -321,13 +358,17 @@ begin
         end loop;
 
         return (
-            -- Remove 'pk'
-            (wal #- '{pk}'),
+            wal,
             is_rls_enabled,
             visible_to_user_ids,
             errors
         )::cdc.wal_rls;
     end if;
+
+    -- Only inserts and updates from here down
+    -- Remove "identity"
+    wal = (wal #- '{identity}');
+
 
     -- create a prepared statement to check the existence of the wal record by primray key
     if (select 1 from pg_prepared_statements where name = 'walrus_rls_stmt' limit 1) > 0 then
@@ -348,19 +389,13 @@ begin
 
         -- If the user defined filters did not exclude the record
         if allowed_by_filters then
-
             -- Check if the user has access
-            -- Deletes are public
-            if is_rls_enabled and action <> 'D' then
-                -- Impersonate the subscribed user
-                perform
-                    set_config('request.jwt.claim.sub', user_id::text, true),
-                    set_config('request.jwt.claim.email', email::text, true);
-                -- Lookup record the record as subscribed user
-                execute 'execute walrus_rls_stmt' into user_has_access;
-            else
-                user_has_access = true;
-            end if;
+            -- Impersonate the subscribed user
+            perform
+                set_config('request.jwt.claim.sub', user_id::text, true),
+                set_config('request.jwt.claim.email', email::text, true);
+            -- Lookup record the record as subscribed user
+            execute 'execute walrus_rls_stmt' into user_has_access;
 
             if user_has_access then
                 visible_to_user_ids = visible_to_user_ids || user_id;
@@ -392,7 +427,7 @@ begin
 
     -- return the change object without primary key info
     return (
-        (wal #- '{pk}'),
+        wal,
         is_rls_enabled,
         visible_to_user_ids,
         errors
