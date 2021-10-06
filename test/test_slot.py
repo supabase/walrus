@@ -166,9 +166,6 @@ def test_read_wal_w_visible_to_has_rls(sess):
     insert_subscriptions(sess, n=2)
     clear_wal(sess)
     insert_notes(sess, n=1)
-    import pdb
-
-    pdb.set_trace()
     raw, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
     assert wal["table"] == "note"
 
@@ -226,7 +223,7 @@ def test_wal_delete(sess):
         "action": "DELETE",
         "schema": "public",
         "table": "note",
-        "identity": [{"name": "id", "value": 1, "type": "bigint"}],
+        "old_record": {"id": 1},
     }.items():
         assert wal[key] == value
     assert wal["commit_timestamp"].startswith("2")

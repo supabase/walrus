@@ -240,6 +240,7 @@ Should the record be visible (true) or filtered out (false) after *filters* are 
             on f.column_name = col.name;
 $$;
 
+
 create or replace function cdc.apply_rls(wal jsonb)
     returns cdc.wal_rls
     language plpgsql
@@ -293,6 +294,23 @@ declare
             left join jsonb_array_elements(wal -> 'pk') pks
                 on (x ->> 'name') = (pks ->> 'name');
 
+    -- previous identity values for update/delete
+    old_columns cdc.wal_column[] =
+        array_agg(
+            (
+                x->>'name',
+                x->>'type',
+                -- TODO DO not extract to text. can not be coerced back
+                x->>'value',
+                (pks ->> 'name') is not null,
+                pg_catalog.has_column_privilege('authenticated', entity_, x->>'name', 'SELECT')
+            )::cdc.wal_column
+        )
+        from
+            jsonb_array_elements(wal -> 'identity') x
+            left join jsonb_array_elements(wal -> 'pk') pks
+                on (x ->> 'name') = (pks ->> 'name');
+
     -- Which columns does the "authenticated" role have permission to select (view)
     -- TODO Refactor to remove this var in favor of columns.is_selectable
     selectable_columns text[] = array_agg(x.name) from unnest(columns) x where x.is_selectable;
@@ -329,46 +347,40 @@ begin
         )::cdc.wal_rls;
     end if;
 
-    /*
-    -- Add "record" key with
-        || jsonb_build_object(
-            ''
-        )
-        -- Create a "record" key with column_name -> value pairs
-    select
-    jsonb_object_agg(
-        col ->> 'name', col ->> 'value'
-    )
-from
-    xyz,
-    jsonb_path_query(dat, '$.columns[*]') col
-    */
+
+    -- UPDATES/DELETEs: populate "old_record": {"col1": "val1", "col2": "val2"}
+    -- Rename and reformat "identity" to "old_record"
+    -- TODO: extract from "old_columns" variable
+    wal = wal || (
+        select
+            jsonb_build_object('old_record', jsonb_object_agg(col ->> 'name', col -> 'value'))
+        from
+            jsonb_array_elements(wal -> 'identity') jae(col)
+    );
+    wal = (wal #- '{identity}');
 
     -- Deletes are public but only expose primary key info
     if action = 'DELETE' then
         -- Example wal input: {"action":"D","schema":"public","table":"notes","identity":[{"name":"id","type":"bigint","value":1}],"pk":[{"name":"id","type":"bigint"}]}
         -- Filters may have been applied to
-        for user_id, filters in select subs.user_id, subs.filters from unnest(subscriptions) subs
-        loop
-            -- Check if filters exclude the record
-            allowed_by_filters = cdc.is_visible_through_filters(columns, filters);
-            if allowed_by_filters then
-                visible_to_user_ids = visible_to_user_ids || user_id;
-            end if;
-        end loop;
-
         return (
             wal,
             is_rls_enabled,
-            visible_to_user_ids,
-            errors
+            (select array_agg(us.user_id) from unnest(subscriptions) us ),
+           errors
         )::cdc.wal_rls;
     end if;
 
     -- Only inserts and updates from here down
     -- Remove "identity"
-    wal = (wal #- '{identity}');
-
+    --
+    -- Add "record": {"col1": "val1", "col2": "val2"}
+    wal = wal || (
+        select
+            jsonb_build_object('record', jsonb_object_agg(col ->> 'name', col -> 'value'))
+        from
+            jsonb_array_elements(wal -> 'columns') jae(col)
+    );
 
     -- create a prepared statement to check the existence of the wal record by primray key
     if (select 1 from pg_prepared_statements where name = 'walrus_rls_stmt' limit 1) > 0 then
