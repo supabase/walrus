@@ -300,7 +300,6 @@ declare
             (
                 x->>'name',
                 x->>'type',
-                -- TODO DO not extract to text. can not be coerced back
                 x->>'value',
                 (pks ->> 'name') is not null,
                 pg_catalog.has_column_privilege('authenticated', entity_, x->>'name', 'SELECT')
@@ -311,34 +310,54 @@ declare
             left join jsonb_array_elements(wal -> 'pk') pks
                 on (x ->> 'name') = (pks ->> 'name');
 
-    -- Which columns does the "authenticated" role have permission to select (view)
-    -- TODO Refactor to remove this var in favor of columns.is_selectable
-    selectable_columns text[] = array_agg(x.name) from unnest(columns) x where x.is_selectable;
-
     filters cdc.user_defined_filter[];
     allowed_by_filters boolean;
     errors text[] = '{}';
-begin
 
-    wal = (
-        wal
-        -- Replace action key with full word of action e.g. I -> INSERT
-        || jsonb_build_object(
-            'action', action,
-            -- Copy "timestamp" key to "commit_timestamp"
-            'commit_timestamp', wal ->> 'timestamp'
-        )
-        -- Remove "timestamp" key
-        #- '{timestamp}'
-        -- Remove "pk" key
-        #- '{pk}'
+    output jsonb;
+begin
+    -- TODO Resolve columns for truncate + delete here
+
+    if action in ('TRUNCATE', 'DELETE') then
+        -- Truncates and deletes don't include a columns key from wal2json
+        columns = array_agg(
+                (
+                    pa.attname,
+                    -- Check type match with inserts
+                    pt.typname,
+                    null::text,
+                    null, -- skip pkey lookup
+                    pg_catalog.has_column_privilege('authenticated', entity_, pa.attname, 'SELECT')
+                )::cdc.wal_column
+            )
+            from
+                pg_attribute pa
+                join pg_type pt
+                    on pa.atttypid = pt.oid
+            where
+                attrelid = entity_
+                and attnum > 0;
+
+    end if;
+
+    output = jsonb_build_object(
+        'schema', wal ->> 'schema',
+        'table', wal ->> 'table',
+        'type', action,
+        'commit_timestamp', wal ->> 'timestamp',
+        'columns', (select jsonb_agg(jsonb_build_object('name', (c).name, 'type', (c).type)) from unnest(columns) c where (c).is_selectable)
     );
 
-    -- Truncates are considered public
-    if action = 'TRUNCATE' then
-        -- Example wal: {"table": "notes", "action": "T", "schema": "public"}
+    if action in ('UPDATE', 'DELETE') then
+        output = output || jsonb_build_object(
+            'old_record',
+            (select jsonb_object_agg((c).name, (c).value) from unnest(old_columns) c where (c).is_selectable)
+        );
+    end if;
+
+    if action in ('TRUNCATE', 'DELETE') then
         return (
-            wal,
+            output,
             is_rls_enabled,
             -- visible to all subscribers
             (select array_agg(s.user_id) from unnest(subscriptions) s),
@@ -347,40 +366,12 @@ begin
         )::cdc.wal_rls;
     end if;
 
-
-    -- UPDATES/DELETEs: populate "old_record": {"col1": "val1", "col2": "val2"}
-    -- Rename and reformat "identity" to "old_record"
-    -- TODO: extract from "old_columns" variable
-    wal = wal || (
-        select
-            jsonb_build_object('old_record', jsonb_object_agg(col ->> 'name', col -> 'value'))
-        from
-            jsonb_array_elements(wal -> 'identity') jae(col)
-    );
-    wal = (wal #- '{identity}');
-
-    -- Deletes are public but only expose primary key info
-    if action = 'DELETE' then
-        -- Example wal input: {"action":"D","schema":"public","table":"notes","identity":[{"name":"id","type":"bigint","value":1}],"pk":[{"name":"id","type":"bigint"}]}
-        -- Filters may have been applied to
-        return (
-            wal,
-            is_rls_enabled,
-            (select array_agg(us.user_id) from unnest(subscriptions) us ),
-           errors
-        )::cdc.wal_rls;
+    if action in ('INSERT', 'UPDATE') then
+        output = output || jsonb_build_object(
+            'record',
+            (select jsonb_object_agg((c).name, (c).value) from unnest(columns) c where (c).is_selectable)
+        );
     end if;
-
-    -- Only inserts and updates from here down
-    -- Remove "identity"
-    --
-    -- Add "record": {"col1": "val1", "col2": "val2"}
-    wal = wal || (
-        select
-            jsonb_build_object('record', jsonb_object_agg(col ->> 'name', col -> 'value'))
-        from
-            jsonb_array_elements(wal -> 'columns') jae(col)
-    );
 
     -- create a prepared statement to check the existence of the wal record by primray key
     if (select 1 from pg_prepared_statements where name = 'walrus_rls_stmt' limit 1) > 0 then
@@ -416,30 +407,13 @@ begin
 
     end loop;
 
-    -- If the "authenticated" role does not have permission to see all columns in the table
-    if array_length(selectable_columns, 1) < array_length(columns, 1) then
-
-        -- Filter the columns to only the ones that are visible to "authenticated"
-        wal = wal || (
-            select
-                jsonb_build_object(
-                    'columns',
-                    jsonb_agg(col_doc)
-                )
-            from
-                jsonb_array_elements(wal -> 'columns') r(col_doc)
-            where
-                (col_doc ->> 'name') = any(selectable_columns)
-        );
-    end if;
-
     perform (
         set_config('role', null, true)
     );
 
     -- return the change object without primary key info
     return (
-        wal,
+        output,
         is_rls_enabled,
         visible_to_user_ids,
         errors

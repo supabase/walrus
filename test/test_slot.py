@@ -132,6 +132,54 @@ def test_read_wal(sess):
     assert raw["table"] == "note"
 
 
+from datetime import datetime
+from typing import Any, Dict, List, Literal
+
+from pydantic import BaseModel, Extra, Field
+
+
+class BaseWAL(BaseModel):
+    table: str
+    schema_: str = Field(..., alias="schema")
+    commit_timestamp: datetime
+
+    class Config:
+        extra = Extra.forbid
+
+
+class Column(BaseModel):
+    name: str
+    type: str
+
+
+ColValDict = Dict[str, Any]
+Columns = List[Column]
+
+
+class DeleteWAL(BaseWAL):
+    type: Literal["DELETE"]
+    columns: Columns
+    old_record: ColValDict
+
+
+class TruncateWAL(BaseWAL):
+    type: Literal["TRUNCATE"]
+    columns: Columns
+
+
+class InsertWAL(BaseWAL):
+    type: Literal["INSERT"]
+    columns: Columns
+    record: ColValDict
+
+
+class UpdateWAL(BaseWAL):
+    type: Literal["UPDATE"]
+    record: ColValDict
+    columns: Columns
+    old_record: ColValDict
+
+
 def test_check_wal2json_settings(sess):
     insert_users(sess)
     setup_note(sess)
@@ -142,8 +190,6 @@ def test_check_wal2json_settings(sess):
     assert raw["table"] == "note"
     # include-pk setting in wal2json output
     assert "pk" in raw
-    # column position
-    # assert "position" in raw["columns"][0]
 
 
 def test_read_wal_w_visible_to_no_rls(sess):
@@ -153,7 +199,7 @@ def test_read_wal_w_visible_to_no_rls(sess):
     clear_wal(sess)
     insert_notes(sess)
     raw, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
-    assert wal["table"] == "note"
+    InsertWAL.parse_obj(wal)
     assert not is_rls_enabled
     # visible_to includes subscribed user when no rls enabled
     assert len(users) == 1
@@ -166,13 +212,13 @@ def test_read_wal_w_visible_to_has_rls(sess):
     insert_subscriptions(sess, n=2)
     clear_wal(sess)
     insert_notes(sess, n=1)
-    raw, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
-    assert wal["table"] == "note"
+    import pdb
 
-    # pk info was filtered out
-    assert "pk" not in wal
-    # position info was filtered out
-    assert "position" not in wal["columns"][0]
+    pdb.set_trace()
+    raw, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
+    print(wal)
+    InsertWAL.parse_obj(wal)
+    assert wal["record"]["id"] == 1
 
     assert is_rls_enabled
     # 2 permitted users
@@ -187,6 +233,9 @@ def test_read_wal_w_visible_to_has_rls(sess):
     assert "dummy" not in columns_in_output
 
 
+# TODO: test update
+
+
 def test_wal_truncate(sess):
     insert_users(sess)
     setup_note(sess)
@@ -197,14 +246,7 @@ def test_wal_truncate(sess):
     sess.execute("truncate table public.note;")
     sess.commit()
     raw, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
-    for key, value in {
-        "table": "note",
-        "action": "TRUNCATE",
-        "schema": "public",
-    }.items():
-        assert wal[key] == value
-    assert wal["commit_timestamp"].startswith("2")
-
+    TruncateWAL.parse_obj(wal)
     assert is_rls_enabled
     assert len(users) == 2
 
@@ -219,15 +261,9 @@ def test_wal_delete(sess):
     sess.execute("delete from public.note;")
     sess.commit()
     raw, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
-    for key, value in {
-        "action": "DELETE",
-        "schema": "public",
-        "table": "note",
-        "old_record": {"id": 1},
-    }.items():
-        assert wal[key] == value
-    assert wal["commit_timestamp"].startswith("2")
-
+    print(wal)
+    DeleteWAL.parse_obj(wal)
+    assert wal["old_record"]["id"] == 1
     assert is_rls_enabled
     assert len(users) == 2
 
