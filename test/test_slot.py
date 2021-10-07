@@ -237,9 +237,6 @@ def test_wal_update(sess):
     clear_wal(sess)
     sess.execute("update public.note set body = 'new body'")
     sess.commit()
-    import pdb
-
-    pdb.set_trace()
     raw, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
     UpdateWAL.parse_obj(wal)
     assert wal["record"]["id"] == 1

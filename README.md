@@ -63,58 +63,126 @@ This package exposes 1 public SQL function `cdc.apply_rls(jsonb)`. It processes 
 - `users`: (uuid[]) An array users who should be notified about the WAL record
 - `errors`: (text[]) An array of errors
 
-The jsonb WAL record is in the following format for inserts and updates.
+The jsonb WAL record is in the following format for inserts.
 ```json
 {
+    "type": "INSERT",
     "schema": "public",
-    "table": "notes",
-    "action": "I",
+    "table": "todos",
     "columns": [
         {
             "name": "id",
-            "type": "bigint",
-            "value": 28
+            "type": "int8",
         },
         {
-            "name": "body",
+            "name": "details",
             "type": "text",
-            "value": "take out the trash"
+        },
+        {
+            "name": "user_id",
+            "type": "int8",
         }
-    ]
-}
-```
-where `action` may be `I` or `U` for insert and updated, respectively.
-
-When the WAL record represents a truncate (`action` = `T`) no column information is included and it should be sent to all subscribed users, regardless of their user defined filters e.g.
-```json
-{
-    "schema": "public",
-    "table": "notes",
-    "action": "T"
+    ],
+    "commit_timestamp": "2021-09-29T17:35:38Z",
+    "record": {
+        "id": "1",
+        "user_id": "1",
+        "details": "mow the lawn"
+    }
 }
 ```
 
-For deletes (`action` = `D`)
-- Only identity column data is included in an `identity` field
-- Row level security is not applied
-- User defined filters are only applied if they filter on identity columns
-
-Since row level security is not applied, data composing a table's identity should be considered public.
-e.g.
+updates:
 ```json
 {
+    "type": "UPDATE",
     "schema": "public",
-    "table": "note",
-    "action": "D",
-    "identity": [
+    "table": "todos",
+    "columns": [
         {
             "name": "id",
-            "type": "bigint",
-            "value": 1
+            "type": "int8",
+        },
+        {
+            "name": "details",
+            "type": "text",
+        },
+        {
+            "name": "user_id",
+            "type": "int8",
         }
-    ]
+    ],
+    "commit_timestamp": "2021-09-29T17:35:38Z",
+    "record": {
+        "id": "2",
+        "user_id": "1",
+        "details": "mow the lawn"
+    },
+    "old_record": {
+        "id": "1",
+    }
 }
 ```
+
+
+deletes:
+```json
+{
+    "type": "DELETE",
+    "schema": "public",
+    "table": "todos",
+    "columns": [
+        {
+            "name": "id",
+            "type": "int8",
+        },
+        {
+            "name": "details",
+            "type": "text",
+        },
+        {
+            "name": "user_id",
+            "type": "int8",
+        }
+    ],
+    "old_record": {
+        "id": "1",
+        "user_id": "1",
+        "details": "mow the lawn"
+    }
+}
+```
+
+and truncates
+```json
+{
+    "type": "TRUNCATE",
+    "schema": "public",
+    "table": "todos",
+    "columns": [
+        {
+            "name": "id",
+            "type": "int8",
+        },
+        {
+            "name": "details",
+            "type": "text",
+        },
+        {
+            "name": "user_id",
+            "type": "int8",
+        }
+    ],
+    "commit_timestamp": "2021-09-29T17:35:38Z"
+}
+```
+
+Important Notes:
+
+- Row level security is not applied to delete statements
+- The key/value pairs displayed in the `old_record` field include the table's identity columns for the record being updated/deleted. To display all values in `old_record` set the replica identity for the table to full
+- When a delete occurs, the contents of `old_record` will be broadcast to all subscribers to that table so ensure that each table's replica identity only contains information that is safe to expose publicly
+
 
 ## How it Works
 
@@ -168,29 +236,16 @@ A complete list of config options can be found [here](https://github.com/eulerto
 ## Installation
 
 The project is SQL only and can be installed by executing the contents of `sql/walrus--0.1.sql` in a database instance.
-## Roadmap
-
-### Release Blockers
-- [x] Filter WAL columns exposed on delete records to include only identity columns
-
-### Non-blockers
-- [x] Sanitize filters on write
-- [x] Ensure columns referenced by filters exist
-- [x] Ensure filter value is coercable to the column's type
-- [ ] Ensure user defined equality operations are valid for the filters data type
-- [x] Ensure user has visibility on the column they're filtering (column security)
 
 ## Tests
 
 Requires
 
 - Python 3.6+
-- Docker
+- docker-compose
 
 ```shell
 pip install -e .
-
-docker build -t pg_wal_rls -f Dockerfile .
 
 pytest
 ```
