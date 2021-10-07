@@ -210,15 +210,14 @@ select
     xyz.errors
 from
     pg_logical_slot_get_changes(
-        'realtime',
-        -- Required Config
-        null, null,
+        'rls_poc', null, null,
         'include-pk', '1',
         'include-transaction', 'false',
+        'include-timestamp', 'true',
+        'write-in-chunks', 'true',
         'format-version', '2',
-        'filter-tables', 'cdc.*',
-        -- Optional Config
-        'actions', 'insert,update,delete,truncate'
+        'actions', 'insert,update,delete,truncate',
+        'filter-tables', 'cdc.*,auth.*'
     ),
     lateral (
         select
