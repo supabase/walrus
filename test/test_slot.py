@@ -1,8 +1,53 @@
-from typing import Any, Dict
+from datetime import datetime
+from typing import Any, Dict, List, Literal
 from uuid import UUID
 
 import pytest
+from pydantic import BaseModel, Extra, Field
 from sqlalchemy import text
+
+
+class BaseWAL(BaseModel):
+    table: str
+    schema_: str = Field(..., alias="schema")
+    commit_timestamp: datetime
+
+    class Config:
+        extra = Extra.forbid
+
+
+class Column(BaseModel):
+    name: str
+    type: str
+
+
+ColValDict = Dict[str, Any]
+Columns = List[Column]
+
+
+class DeleteWAL(BaseWAL):
+    type: Literal["DELETE"]
+    columns: Columns
+    old_record: ColValDict
+
+
+class TruncateWAL(BaseWAL):
+    type: Literal["TRUNCATE"]
+    columns: Columns
+
+
+class InsertWAL(BaseWAL):
+    type: Literal["INSERT"]
+    columns: Columns
+    record: ColValDict
+
+
+class UpdateWAL(BaseWAL):
+    type: Literal["UPDATE"]
+    record: ColValDict
+    columns: Columns
+    old_record: ColValDict
+
 
 QUERY = text(
     """
@@ -132,54 +177,6 @@ def test_read_wal(sess):
     assert raw["table"] == "note"
 
 
-from datetime import datetime
-from typing import Any, Dict, List, Literal
-
-from pydantic import BaseModel, Extra, Field
-
-
-class BaseWAL(BaseModel):
-    table: str
-    schema_: str = Field(..., alias="schema")
-    commit_timestamp: datetime
-
-    class Config:
-        extra = Extra.forbid
-
-
-class Column(BaseModel):
-    name: str
-    type: str
-
-
-ColValDict = Dict[str, Any]
-Columns = List[Column]
-
-
-class DeleteWAL(BaseWAL):
-    type: Literal["DELETE"]
-    columns: Columns
-    old_record: ColValDict
-
-
-class TruncateWAL(BaseWAL):
-    type: Literal["TRUNCATE"]
-    columns: Columns
-
-
-class InsertWAL(BaseWAL):
-    type: Literal["INSERT"]
-    columns: Columns
-    record: ColValDict
-
-
-class UpdateWAL(BaseWAL):
-    type: Literal["UPDATE"]
-    record: ColValDict
-    columns: Columns
-    old_record: ColValDict
-
-
 def test_check_wal2json_settings(sess):
     insert_users(sess)
     setup_note(sess)
@@ -204,6 +201,8 @@ def test_read_wal_w_visible_to_no_rls(sess):
     # visible_to includes subscribed user when no rls enabled
     assert len(users) == 1
 
+    assert [x for x in wal["columns"] if x["name"] == "id"][0]["type"] == "int8"
+
 
 def test_read_wal_w_visible_to_has_rls(sess):
     insert_users(sess)
@@ -212,11 +211,7 @@ def test_read_wal_w_visible_to_has_rls(sess):
     insert_subscriptions(sess, n=2)
     clear_wal(sess)
     insert_notes(sess, n=1)
-    import pdb
-
-    pdb.set_trace()
     raw, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
-    print(wal)
     InsertWAL.parse_obj(wal)
     assert wal["record"]["id"] == 1
 
@@ -233,7 +228,53 @@ def test_read_wal_w_visible_to_has_rls(sess):
     assert "dummy" not in columns_in_output
 
 
-# TODO: test update
+def test_wal_update(sess):
+    insert_users(sess)
+    setup_note(sess)
+    setup_note_rls(sess)
+    insert_subscriptions(sess, n=2)
+    insert_notes(sess, n=1, body="old body")
+    clear_wal(sess)
+    sess.execute("update public.note set body = 'new body'")
+    sess.commit()
+    import pdb
+
+    pdb.set_trace()
+    raw, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
+    UpdateWAL.parse_obj(wal)
+    assert wal["record"]["id"] == 1
+    assert wal["record"]["body"] == "new body"
+
+    assert wal["old_record"]["id"] == 1
+    # Only the identity of the previous
+    assert "old_body" not in wal["old_record"]
+
+    assert is_rls_enabled
+    # 2 permitted users
+    assert len(users) == 1
+    # check the "dummy" column is not present in the columns due to
+    # role secutiry on "authenticated" role
+    columns_in_output = [x["name"] for x in wal["columns"]]
+    for col in ["id", "user_id", "body"]:
+        assert col in columns_in_output
+    assert "dummy" not in columns_in_output
+    assert [x for x in wal["columns"] if x["name"] == "id"][0]["type"] == "int8"
+
+
+def test_wal_update_changed_identity(sess):
+    insert_users(sess)
+    setup_note(sess)
+    setup_note_rls(sess)
+    insert_subscriptions(sess, n=2)
+    insert_notes(sess, n=1, body="some body")
+    clear_wal(sess)
+    sess.execute("update public.note set id = 99")
+    sess.commit()
+    raw, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
+    UpdateWAL.parse_obj(wal)
+    assert wal["record"]["id"] == 99
+    assert wal["record"]["body"] == "some body"
+    assert wal["old_record"]["id"] == 1
 
 
 def test_wal_truncate(sess):
@@ -261,7 +302,6 @@ def test_wal_delete(sess):
     sess.execute("delete from public.note;")
     sess.commit()
     raw, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
-    print(wal)
     DeleteWAL.parse_obj(wal)
     assert wal["old_record"]["id"] == 1
     assert is_rls_enabled
