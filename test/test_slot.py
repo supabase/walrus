@@ -358,14 +358,17 @@ limit 1;
 
 
 @pytest.mark.performance
-def test_performance_on_n_recs_n_subscribed(sess):
+@pytest.mark.parametrize("rls_on", [False, True])
+def test_performance_on_n_recs_n_subscribed(sess, rls_on: bool):
     insert_users(sess, n=10000)
     setup_note(sess)
-    setup_note_rls(sess)
+    if rls_on:
+        setup_note_rls(sess)
     clear_wal(sess)
 
-    with open("perf.tsv", "w") as f:
-        f.write("n_notes\tn_subscriptions\texec_time\n")
+    if not rls_on:
+        with open("perf.tsv", "w") as f:
+            f.write("n_notes\tn_subscriptions\texec_time\trls_on\n")
 
     for n_subscriptions in [
         1,
@@ -411,7 +414,7 @@ def test_performance_on_n_recs_n_subscribed(sess):
             )
 
             with open("perf.tsv", "a") as f:
-                f.write(f"{n_notes}\t{n_subscriptions}\t{exec_time}\n")
+                f.write(f"{n_notes}\t{n_subscriptions}\t{exec_time}\t{rls_on}\n")
 
             # Confirm that the data is correct
             data = sess.execute(QUERY).all()
@@ -423,21 +426,25 @@ def test_performance_on_n_recs_n_subscribed(sess):
             for (raw, wal, is_rls_enabled, users, errors) in data:
                 for visible_to in users:
                     all_visible_to.append(visible_to)
-            try:
-                assert (
-                    len(all_visible_to)
-                    == len(set(all_visible_to))
-                    == min(n_notes, n_subscriptions)
-                )
-            except:
-                print(
-                    "n_notes",
-                    n_notes,
-                    "n_subscriptions",
-                    n_subscriptions,
-                    all_visible_to,
-                )
-                raise
+
+            if rls_on:
+                try:
+                    assert (
+                        len(all_visible_to)
+                        == len(set(all_visible_to))
+                        == min(n_notes, n_subscriptions)
+                    )
+                except:
+                    print(
+                        "n_notes",
+                        n_notes,
+                        "n_subscriptions",
+                        n_subscriptions,
+                        all_visible_to,
+                    )
+                    raise
+            else:
+                assert n_subscriptions == len(set(all_visible_to))
 
             sess.execute(
                 text(

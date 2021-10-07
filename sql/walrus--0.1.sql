@@ -7,24 +7,14 @@ create schema cdc;
 grant usage on schema cdc to postgres;
 grant usage on schema cdc to authenticated;
 
-create or replace function cdc.get_column_type(entity regclass, column_name text)
-    returns regtype
-    language sql
-    immutable
-as $$
-    select atttypid::regtype
-    from pg_catalog.pg_attribute
-    where attrelid = entity
-    and attname = column_name
-$$;
 
-
--- Subset from https://postgrest.org/en/v4.1/api.html#horizontal-filtering-rows
 create type cdc.equality_op as enum(
     'eq', 'neq', 'lt', 'lte', 'gt', 'gte'
 );
 
+
 create type cdc.action as enum ('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'ERROR');
+
 
 create type cdc.user_defined_filter as (
     column_name text,
@@ -48,6 +38,7 @@ create table cdc.subscription (
 );
 create index ix_cdc_subscription_entity on cdc.subscription using hash (entity);
 
+
 create function cdc.subscription_check_filters()
     returns trigger
     language plpgsql
@@ -62,16 +53,11 @@ declare
             array_agg(c.column_name order by c.ordinal_position),
             '{}'::text[]
         )
-        from information_schema.columns c
+        from
+            information_schema.columns c
         where
             (quote_ident(c.table_schema) || '.' || quote_ident(c.table_name))::regclass = new.entity
-            and pg_catalog.has_column_privilege(
-                'authenticated',
-                new.entity,
-                c.column_name,
-                'SELECT'
-        );
-
+            and pg_catalog.has_column_privilege('authenticated', new.entity, c.column_name, 'SELECT');
     filter cdc.user_defined_filter;
     col_type text;
 begin
@@ -82,7 +68,12 @@ begin
         end if;
 
         -- Type is sanitized and safe for string interpolation
-        col_type = (cdc.get_column_type(new.entity, filter.column_name))::text;
+        col_type = (
+            select atttypid::regtype
+            from pg_catalog.pg_attribute
+            where attrelid = new.entity
+                  and attname = filter.column_name
+        )::text;
         if col_type is null then
             raise exception 'failed to lookup type for column %', filter.column_name;
         end if;
@@ -112,23 +103,6 @@ create trigger tr_check_filters
 
 grant all on cdc.subscription to postgres;
 grant select on cdc.subscription to authenticated;
-
-
-create or replace function  cdc.is_rls_enabled(entity regclass)
-    returns boolean
-    stable
-    language sql
-as $$
-/*
-Is Row Level Security enabled for the entity
-*/
-    select
-        relrowsecurity
-    from
-        pg_class
-    where
-        oid = entity;
-$$;
 
 
 create or replace function cdc.check_equality_op(
@@ -189,12 +163,15 @@ Example
 */
     select
 'prepare ' || prepared_statement_name || ' as
-select
-    count(*) > 0
-from
-    ' || entity || '
-where
-    ' || string_agg(quote_ident(pkc.name) || '=' || quote_nullable(pkc.value) , ' and ') || ';'
+    select
+        exists(
+            select
+                1
+            from
+                ' || entity || '
+            where
+                ' || string_agg(quote_ident(pkc.name) || '=' || quote_nullable(pkc.value) , ' and ') || '
+        )'
     from
         unnest(columns) pkc
     where
@@ -263,13 +240,13 @@ declare
     );
 
     -- Is row level security enabled for the table
-    is_rls_enabled bool = cdc.is_rls_enabled(entity_);
+    is_rls_enabled bool = relrowsecurity from pg_class where oid = entity_;
 
     -- Subscription vars
     user_id uuid;
     email varchar(255);
-    filters cdc.user_defined_filter[];
     user_has_access bool;
+    is_visible_to_user boolean;
     visible_to_user_ids uuid[] = '{}';
 
     -- user subscriptions to the wal record's table
@@ -363,27 +340,31 @@ begin
 
     if action in ('TRUNCATE', 'DELETE') then
         visible_to_user_ids = array_agg(s.user_id) from unnest(subscriptions) s;
-
     else
-
-        -- create a prepared statement to check the existence of the wal record by primray key
-        if (select 1 from pg_prepared_statements where name = 'walrus_rls_stmt' limit 1) > 0 then
-            deallocate walrus_rls_stmt;
-        end if;
-        execute cdc.build_prepared_statement_sql('walrus_rls_stmt', entity_, columns);
-
-        if is_rls_enabled then
-            -- Set role to "authenticated"
+        -- If RLS is on and someone is subscribed to the table prep
+        if is_rls_enabled and array_length(subscriptions, 1) > 0 then
             perform
                 set_config('role', 'authenticated', true),
                 set_config('request.jwt.claim.role', 'authenticated', true);
+
+            if (select 1 from pg_prepared_statements where name = 'walrus_rls_stmt' limit 1) > 0 then
+                deallocate walrus_rls_stmt;
+            end if;
+            execute cdc.build_prepared_statement_sql('walrus_rls_stmt', entity_, columns);
+
         end if;
 
         -- For each subscribed user
-        for user_id, email, filters in select subs.user_id, subs.email, subs.filters from unnest(subscriptions) subs
+        for user_id, email, is_visible_to_user in (
+                select
+                    subs.user_id,
+                    subs.email,
+                    cdc.is_visible_through_filters(columns, subs.filters)
+                from
+                    unnest(subscriptions) subs
+        )
         loop
-            -- If the user defined filters did not exclude the record
-            if cdc.is_visible_through_filters(columns, filters) then
+            if is_visible_to_user then
                 -- If RLS is off, add to visible users
                 if not is_rls_enabled then
                     visible_to_user_ids = visible_to_user_ids || user_id;
@@ -393,9 +374,11 @@ begin
                         set_config('request.jwt.claim.sub', user_id::text, true),
                         set_config('request.jwt.claim.email', email::text, true);
                     execute 'execute walrus_rls_stmt' into user_has_access;
+
                     if user_has_access then
                         visible_to_user_ids = visible_to_user_ids || user_id;
                     end if;
+
                 end if;
             end if;
         end loop;
