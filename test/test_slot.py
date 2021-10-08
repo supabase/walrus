@@ -59,7 +59,7 @@ select
     xyz.errors
 from
     pg_logical_slot_get_changes(
-        'rls_poc', null, null,
+        'realtime', null, null,
         'include-pk', '1',
         'include-transaction', 'false',
         'include-timestamp', 'true',
@@ -83,7 +83,7 @@ from
 
 def clear_wal(sess):
     data = sess.execute(
-        "select * from pg_logical_slot_get_changes('rls_poc', null, null)"
+        "select * from pg_logical_slot_get_changes('realtime', null, null)"
     ).scalar()
     sess.commit()
 
@@ -195,7 +195,7 @@ def test_read_wal_w_visible_to_no_rls(sess):
     insert_subscriptions(sess)
     clear_wal(sess)
     insert_notes(sess)
-    raw, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
+    _, wal, is_rls_enabled, users, _ = sess.execute(QUERY).one()
     InsertWAL.parse_obj(wal)
     assert not is_rls_enabled
     # visible_to includes subscribed user when no rls enabled
@@ -211,7 +211,8 @@ def test_read_wal_w_visible_to_has_rls(sess):
     insert_subscriptions(sess, n=2)
     clear_wal(sess)
     insert_notes(sess, n=1)
-    raw, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
+    sess.commit()
+    _, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
     InsertWAL.parse_obj(wal)
     assert wal["record"]["id"] == 1
 
@@ -396,7 +397,7 @@ def test_performance_on_n_recs_n_subscribed(sess, rls_on: bool):
                 cdc.apply_rls(data::jsonb)
             from
                 pg_logical_slot_peek_changes(
-                    'rls_poc', null, null,
+                    'realtime', null, null,
                     'include-pk', '1',
                     'include-transaction', 'false',
                     'format-version', '2',

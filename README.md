@@ -85,8 +85,8 @@ The jsonb WAL record is in the following format for inserts.
     ],
     "commit_timestamp": "2021-09-29T17:35:38Z",
     "record": {
-        "id": "1",
-        "user_id": "1",
+        "id": 1,
+        "user_id": 1,
         "details": "mow the lawn"
     }
 }
@@ -114,12 +114,12 @@ updates:
     ],
     "commit_timestamp": "2021-09-29T17:35:38Z",
     "record": {
-        "id": "2",
-        "user_id": "1",
+        "id": 2,
+        "user_id": 1,
         "details": "mow the lawn"
     },
     "old_record": {
-        "id": "1",
+        "id": 1,
     }
 }
 ```
@@ -146,9 +146,7 @@ deletes:
         }
     ],
     "old_record": {
-        "id": "1",
-        "user_id": "1",
-        "details": "mow the lawn"
+        "id": 1
     }
 }
 ```
@@ -210,7 +208,7 @@ select
     xyz.errors
 from
     pg_logical_slot_get_changes(
-        'rls_poc', null, null,
+        'realtime', null, null,
         'include-pk', '1',
         'include-transaction', 'false',
         'include-timestamp', 'true',

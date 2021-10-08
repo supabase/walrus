@@ -51,7 +51,7 @@ def sess(engine):
     conn.execute(
         text(
             """
-select * from pg_create_logical_replication_slot('rls_poc', 'wal2json');
+select * from pg_create_logical_replication_slot('realtime', 'wal2json');
 
 create or replace function benchmark(sql text, n int)
   returns interval
@@ -86,7 +86,7 @@ $$;
     # Cleanup between tests
     conn.execute(
         """
-        select pg_drop_replication_slot('rls_poc');
+        select pg_drop_replication_slot('realtime');
     """
     )
 
