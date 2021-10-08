@@ -9,7 +9,7 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
-CONTAINER_NAME = "walrus_db_1"
+CONTAINER_NAME = "walrus_db"
 
 
 @pytest.fixture(scope="session")
