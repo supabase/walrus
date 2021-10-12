@@ -219,6 +219,8 @@ def test_read_wal_w_visible_to_has_rls(sess):
     assert wal["record"]["id"] == 1
     assert wal["record"]["arr_text"] == ["one", "two"]
     assert wal["record"]["arr_int"] == [1, 2]
+    assert [x for x in wal["columns"] if x["name"] == "arr_text"][0]["type"] == "_text"
+    assert [x for x in wal["columns"] if x["name"] == "arr_int"][0]["type"] == "_int4"
 
     assert is_rls_enabled
     # 2 permitted users
