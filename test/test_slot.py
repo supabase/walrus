@@ -96,6 +96,8 @@ create table public.note(
     id bigserial primary key,
     user_id uuid not null references auth.users(id),
     body text not null,
+    arr_text text[] not null default array['one', 'two'],
+    arr_int int[] not null default array[1, 2],
 
     -- dummy column with revoked select for "authenticated"
     dummy text
@@ -104,7 +106,7 @@ create table public.note(
 create index ix_note_user_id on public.note (user_id);
 
 revoke select on public.note from authenticated;
-grant select (id, user_id, body) on public.note to authenticated;
+grant select (id, user_id, body, arr_text, arr_int) on public.note to authenticated;
 
     """
         )
@@ -215,6 +217,8 @@ def test_read_wal_w_visible_to_has_rls(sess):
     _, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
     InsertWAL.parse_obj(wal)
     assert wal["record"]["id"] == 1
+    assert wal["record"]["arr_text"] == ["one", "two"]
+    assert wal["record"]["arr_int"] == [1, 2]
 
     assert is_rls_enabled
     # 2 permitted users

@@ -188,6 +188,19 @@ create type cdc.wal_rls as (
     errors text[]
 );
 
+create function cdc.cast(val text, type_ regtype)
+    returns jsonb
+    immutable
+    language plpgsql
+as $$
+declare
+    res jsonb;
+begin
+    execute format('select to_jsonb(%L::'|| type_::text || ')', val)  into res;
+    return res;
+end
+$$;
+
 
 
 create or replace function cdc.is_visible_through_filters(columns cdc.wal_column[], filters cdc.user_defined_filter[])
@@ -263,7 +276,7 @@ declare
             (
                 x->>'name',
                 x->>'type',
-                x->'value',
+                cdc.cast((x->'value') #>> '{}', (x->>'type')::regtype),
                 (pks ->> 'name') is not null,
                 pg_catalog.has_column_privilege('authenticated', entity_, x->>'name', 'SELECT')
             )::cdc.wal_column
@@ -279,7 +292,7 @@ declare
             (
                 x->>'name',
                 x->>'type',
-                x->'value',
+                cdc.cast((x->'value') #>> '{}', (x->>'type')::regtype),
                 (pks ->> 'name') is not null,
                 pg_catalog.has_column_privilege('authenticated', entity_, x->>'name', 'SELECT')
             )::cdc.wal_column
@@ -328,7 +341,7 @@ begin
             )
         else '{}'::jsonb
     end
-    -- Add "old_record" key for upate and delete
+    -- Add "old_record" key for update and delete
     || case
         when action in ('UPDATE', 'DELETE') then
             jsonb_build_object(
