@@ -7,22 +7,14 @@ create schema cdc;
 grant usage on schema cdc to postgres;
 grant usage on schema cdc to authenticated;
 
-create or replace function cdc.get_column_type(entity regclass, column_name text)
-    returns regtype
-    language sql
-    immutable
-as $$
-    select atttypid::regtype
-    from pg_catalog.pg_attribute
-    where attrelid = entity
-    and attname = column_name
-$$;
 
-
--- Subset from https://postgrest.org/en/v4.1/api.html#horizontal-filtering-rows
 create type cdc.equality_op as enum(
     'eq', 'neq', 'lt', 'lte', 'gt', 'gte'
 );
+
+
+create type cdc.action as enum ('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'ERROR');
+
 
 create type cdc.user_defined_filter as (
     column_name text,
@@ -46,6 +38,7 @@ create table cdc.subscription (
 );
 create index ix_cdc_subscription_entity on cdc.subscription using hash (entity);
 
+
 create function cdc.subscription_check_filters()
     returns trigger
     language plpgsql
@@ -60,16 +53,11 @@ declare
             array_agg(c.column_name order by c.ordinal_position),
             '{}'::text[]
         )
-        from information_schema.columns c
+        from
+            information_schema.columns c
         where
             (quote_ident(c.table_schema) || '.' || quote_ident(c.table_name))::regclass = new.entity
-            and pg_catalog.has_column_privilege(
-                'authenticated',
-                new.entity,
-                c.column_name,
-                'SELECT'
-        );
-
+            and pg_catalog.has_column_privilege('authenticated', new.entity, c.column_name, 'SELECT');
     filter cdc.user_defined_filter;
     col_type text;
 begin
@@ -80,7 +68,12 @@ begin
         end if;
 
         -- Type is sanitized and safe for string interpolation
-        col_type = (cdc.get_column_type(new.entity, filter.column_name))::text;
+        col_type = (
+            select atttypid::regtype
+            from pg_catalog.pg_attribute
+            where attrelid = new.entity
+                  and attname = filter.column_name
+        )::text;
         if col_type is null then
             raise exception 'failed to lookup type for column %', filter.column_name;
         end if;
@@ -110,23 +103,6 @@ create trigger tr_check_filters
 
 grant all on cdc.subscription to postgres;
 grant select on cdc.subscription to authenticated;
-
-
-create or replace function  cdc.is_rls_enabled(entity regclass)
-    returns boolean
-    stable
-    language sql
-as $$
-/*
-Is Row Level Security enabled for the entity
-*/
-    select
-        relrowsecurity
-    from
-        pg_class
-    where
-        oid = entity;
-$$;
 
 
 create or replace function cdc.check_equality_op(
@@ -165,7 +141,7 @@ $$;
 create type cdc.wal_column as (
     name text,
     type text,
-    value text,
+    value jsonb,
     is_pkey boolean,
     is_selectable boolean
 );
@@ -187,12 +163,15 @@ Example
 */
     select
 'prepare ' || prepared_statement_name || ' as
-select
-    count(*) > 0
-from
-    ' || entity || '
-where
-    ' || string_agg(quote_ident(pkc.name) || '=' || quote_nullable(pkc.value) , ' and ') || ';'
+    select
+        exists(
+            select
+                1
+            from
+                ' || entity || '
+            where
+                ' || string_agg(quote_ident(pkc.name) || '=' || quote_nullable(pkc.value) , ' and ') || '
+        )'
     from
         unnest(columns) pkc
     where
@@ -208,6 +187,19 @@ create type cdc.wal_rls as (
     users uuid[],
     errors text[]
 );
+
+create function cdc.cast(val text, type_ regtype)
+    returns jsonb
+    immutable
+    language plpgsql
+as $$
+declare
+    res jsonb;
+begin
+    execute format('select to_jsonb(%L::'|| type_::text || ')', val)  into res;
+    return res;
+end
+$$;
 
 
 
@@ -226,7 +218,8 @@ Should the record be visible (true) or filtered out (false) after *filters* are 
                 cdc.check_equality_op(
                     op:=f.op,
                     type_:=col.type::regtype,
-                    val_1:=col.value,
+                    -- cast jsonb to text
+                    val_1:=col.value #>> '{}',
                     val_2:=f.value
                 )::int
             ) = count(1),
@@ -249,17 +242,25 @@ declare
     entity_ regclass = (quote_ident(wal ->> 'schema') || '.' || quote_ident(wal ->> 'table'))::regclass;
 
     -- I, U, D, T: insert, update ...
-    action char = wal ->> 'action';
+    action cdc.action = (
+        case wal ->> 'action'
+            when 'I' then 'INSERT'
+            when 'U' then 'UPDATE'
+            when 'D' then 'DELETE'
+            when 'T' then 'TRUNCATE'
+            else 'ERROR'
+        end
+    );
 
-    -- Check if RLS is enabled for the table
-    is_rls_enabled bool = cdc.is_rls_enabled(entity_);
+    -- Is row level security enabled for the table
+    is_rls_enabled bool = relrowsecurity from pg_class where oid = entity_;
 
-    -- UUIDs of subscribed users who may view the change
+    -- Subscription vars
     user_id uuid;
     email varchar(255);
     user_has_access bool;
+    is_visible_to_user boolean;
     visible_to_user_ids uuid[] = '{}';
-
 
     -- user subscriptions to the wal record's table
     subscriptions cdc.subscription[] =
@@ -275,7 +276,7 @@ declare
             (
                 x->>'name',
                 x->>'type',
-                x->>'value',
+                cdc.cast((x->'value') #>> '{}', (x->>'type')::regtype),
                 (pks ->> 'name') is not null,
                 pg_catalog.has_column_privilege('authenticated', entity_, x->>'name', 'SELECT')
             )::cdc.wal_column
@@ -285,117 +286,127 @@ declare
             left join jsonb_array_elements(wal -> 'pk') pks
                 on (x ->> 'name') = (pks ->> 'name');
 
-    -- Which columns does the "authenticated" role have permission to select (view)
-    -- TODO Refactor to remove this var in favor of columns.is_selectable
-    selectable_columns text[] = array_agg(x.name) from unnest(columns) x where x.is_selectable;
+    -- previous identity values for update/delete
+    old_columns cdc.wal_column[] =
+        array_agg(
+            (
+                x->>'name',
+                x->>'type',
+                cdc.cast((x->'value') #>> '{}', (x->>'type')::regtype),
+                (pks ->> 'name') is not null,
+                pg_catalog.has_column_privilege('authenticated', entity_, x->>'name', 'SELECT')
+            )::cdc.wal_column
+        )
+        from
+            jsonb_array_elements(wal -> 'identity') x
+            left join jsonb_array_elements(wal -> 'pk') pks
+                on (x ->> 'name') = (pks ->> 'name');
 
-    filters cdc.user_defined_filter[];
-    allowed_by_filters boolean;
-    errors text[] = '{}';
+    output jsonb;
 begin
 
-    -- Truncates are considered public
-    if action = 'T' then
-        -- Example wal: {"table": "notes", "action": "T", "schema": "public"}
-        return (
-            wal,
-            is_rls_enabled,
-            -- visible to all subscribers
-            (select array_agg(s.user_id) from unnest(subscriptions) s),
-            -- errors is empty
-            errors
-        )::cdc.wal_rls;
-    end if;
+    -------------------------------
+    -- Build Output JSONB Object --
+    -------------------------------
+    output = jsonb_build_object(
+        'schema', wal ->> 'schema',
+        'table', wal ->> 'table',
+        'type', action,
+        'commit_timestamp', wal ->> 'timestamp',
+        'columns', (
+            select
+                jsonb_agg(
+                    jsonb_build_object(
+                        'name', pa.attname,
+                        'type', pt.typname
+                    )
+                    order by pa.attnum asc
+                )
+            from
+                pg_attribute pa
+                join pg_type pt
+                    on pa.atttypid = pt.oid
+            where
+                attrelid = entity_
+                and attnum > 0
+                and pg_catalog.has_column_privilege('authenticated', entity_, pa.attname, 'SELECT')
+        )
+    )
+    -- Add "record" key for insert and update
+    || case
+        when action in ('INSERT', 'UPDATE') then
+            jsonb_build_object(
+                'record',
+                (select jsonb_object_agg((c).name, (c).value) from unnest(columns) c where (c).is_selectable)
+            )
+        else '{}'::jsonb
+    end
+    -- Add "old_record" key for update and delete
+    || case
+        when action in ('UPDATE', 'DELETE') then
+            jsonb_build_object(
+                'old_record',
+                (select jsonb_object_agg((c).name, (c).value) from unnest(old_columns) c where (c).is_selectable)
+            )
+        else '{}'::jsonb
+    end;
 
-    -- Deletes are public but only expose primary key info
-    if action = 'D' then
-        -- Example wal input: {"action":"D","schema":"public","table":"notes","identity":[{"name":"id","type":"bigint","value":1}],"pk":[{"name":"id","type":"bigint"}]}
-        -- Filters may have been applied to
-        for user_id, filters in select subs.user_id, subs.filters from unnest(subscriptions) subs
+    if action in ('TRUNCATE', 'DELETE') then
+        visible_to_user_ids = array_agg(s.user_id) from unnest(subscriptions) s;
+    else
+        -- If RLS is on and someone is subscribed to the table prep
+        if is_rls_enabled and array_length(subscriptions, 1) > 0 then
+            perform
+                set_config('role', 'authenticated', true),
+                set_config('request.jwt.claim.role', 'authenticated', true);
+
+            if (select 1 from pg_prepared_statements where name = 'walrus_rls_stmt' limit 1) > 0 then
+                deallocate walrus_rls_stmt;
+            end if;
+            execute cdc.build_prepared_statement_sql('walrus_rls_stmt', entity_, columns);
+
+        end if;
+
+        -- For each subscribed user
+        for user_id, email, is_visible_to_user in (
+                select
+                    subs.user_id,
+                    subs.email,
+                    cdc.is_visible_through_filters(columns, subs.filters)
+                from
+                    unnest(subscriptions) subs
+        )
         loop
-            -- Check if filters exclude the record
-            allowed_by_filters = cdc.is_visible_through_filters(columns, filters);
-            if allowed_by_filters then
-                visible_to_user_ids = visible_to_user_ids || user_id;
+            if is_visible_to_user then
+                -- If RLS is off, add to visible users
+                if not is_rls_enabled then
+                    visible_to_user_ids = visible_to_user_ids || user_id;
+                else
+                    -- Check if RLS allows the user to see the record
+                    perform
+                        set_config('request.jwt.claim.sub', user_id::text, true),
+                        set_config('request.jwt.claim.email', email::text, true);
+                    execute 'execute walrus_rls_stmt' into user_has_access;
+
+                    if user_has_access then
+                        visible_to_user_ids = visible_to_user_ids || user_id;
+                    end if;
+
+                end if;
             end if;
         end loop;
 
-        return (
-            -- Remove 'pk'
-            (wal #- '{pk}'),
-            is_rls_enabled,
-            visible_to_user_ids,
-            errors
-        )::cdc.wal_rls;
-    end if;
-
-    -- create a prepared statement to check the existence of the wal record by primray key
-    if (select 1 from pg_prepared_statements where name = 'walrus_rls_stmt' limit 1) > 0 then
-        deallocate walrus_rls_stmt;
-    end if;
-    execute cdc.build_prepared_statement_sql('walrus_rls_stmt', entity_, columns);
-
-    -- Set role to "authenticated"
-    perform
-        set_config('role', 'authenticated', true),
-        set_config('request.jwt.claim.role', 'authenticated', true);
-
-    -- For each subscribed user
-    for user_id, email, filters in select subs.user_id, subs.email, subs.filters from unnest(subscriptions) subs
-    loop
-        -- Check if the user defined filters exclude the current record
-        allowed_by_filters = cdc.is_visible_through_filters(columns, filters);
-
-        -- If the user defined filters did not exclude the record
-        if allowed_by_filters then
-
-            -- Check if the user has access
-            -- Deletes are public
-            if is_rls_enabled and action <> 'D' then
-                -- Impersonate the subscribed user
-                perform
-                    set_config('request.jwt.claim.sub', user_id::text, true),
-                    set_config('request.jwt.claim.email', email::text, true);
-                -- Lookup record the record as subscribed user
-                execute 'execute walrus_rls_stmt' into user_has_access;
-            else
-                user_has_access = true;
-            end if;
-
-            if user_has_access then
-                visible_to_user_ids = visible_to_user_ids || user_id;
-            end if;
-        end if;
-
-    end loop;
-
-    -- If the "authenticated" role does not have permission to see all columns in the table
-    if array_length(selectable_columns, 1) < array_length(columns, 1) then
-
-        -- Filter the columns to only the ones that are visible to "authenticated"
-        wal = wal || (
-            select
-                jsonb_build_object(
-                    'columns',
-                    jsonb_agg(col_doc)
-                )
-            from
-                jsonb_array_elements(wal -> 'columns') r(col_doc)
-            where
-                (col_doc ->> 'name') = any(selectable_columns)
+        perform (
+            set_config('role', null, true)
         );
+
     end if;
 
-    perform (
-        set_config('role', null, true)
-    );
-
-    -- return the change object without primary key info
     return (
-        (wal #- '{pk}'),
+        output,
         is_rls_enabled,
         visible_to_user_ids,
-        errors
+        array[]::text[]
     )::cdc.wal_rls;
 end;
 $$;

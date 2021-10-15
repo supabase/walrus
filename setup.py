@@ -29,6 +29,7 @@ DEV_REQUIRES = [
     "sqlalchemy",
     "pre-commit",
     "flupy",
+    "pydantic",
 ]
 
 
