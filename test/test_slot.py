@@ -1,19 +1,37 @@
-from datetime import datetime
+import re
 from typing import Any, Dict, List, Literal
 from uuid import UUID
 
 import pytest
-from pydantic import BaseModel, Extra, Field
+from pydantic import BaseModel, Extra, Field, validator
 from sqlalchemy import text
+
+
+def validate_iso8601(text: str) -> bool:
+    """Validates a timestamp string matches iso8601 format"""
+    # datetime.datetime.fromisoformat does not handle timezones correctly
+    regex = r"^(-?(?:[1-9][0-9]*)?[0-9]{4})-(1[0-2]|0[1-9])-(3[01]|0[1-9]|[12][0-9])T(2[0-3]|[01][0-9]):([0-5][0-9]):([0-5][0-9])(\.[0-9]+)?(Z|[+-](?:2[0-3]|[01][0-9]):[0-5][0-9])?$"
+    match_iso8601 = re.compile(regex).match
+    try:
+        if match_iso8601(text) is not None:
+            return True
+    except:
+        pass
+    return False
 
 
 class BaseWAL(BaseModel):
     table: str
     schema_: str = Field(..., alias="schema")
-    commit_timestamp: datetime
+    commit_timestamp: str
 
     class Config:
         extra = Extra.forbid
+
+    @validator("commit_timestamp")
+    def validate_commit_timestamp(cls, v):
+        validate_iso8601(v)
+        return v
 
 
 class Column(BaseModel):

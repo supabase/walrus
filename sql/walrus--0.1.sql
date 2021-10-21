@@ -312,7 +312,7 @@ begin
         'schema', wal ->> 'schema',
         'table', wal ->> 'table',
         'type', action,
-        'commit_timestamp', wal ->> 'timestamp',
+        'commit_timestamp', (wal ->> 'timestamp')::text::timestamp with time zone,
         'columns', (
             select
                 jsonb_agg(
