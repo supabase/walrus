@@ -26,7 +26,7 @@ create type cdc.user_defined_filter as (
 create table cdc.subscription (
     -- Tracks which users are subscribed to each table
     id bigint not null generated always as identity,
-    user_id uuid not null references auth.users(id),
+    user_id uuid not null references auth.users(id) on delete cascade,
     -- Populated automatically by trigger. Required to enable auth.email()
     email varchar(255),
     entity regclass not null,
