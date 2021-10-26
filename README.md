@@ -274,7 +274,7 @@ from
         select
             *
         from
-            pg_logical_slot_peek_changes(
+            pg_logical_slot_get_changes(
                 'realtime', null, null,
                 'include-pk', '1',
                 'include-transaction', 'false',
