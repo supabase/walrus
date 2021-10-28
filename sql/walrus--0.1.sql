@@ -105,6 +105,43 @@ grant all on cdc.subscription to postgres;
 grant select on cdc.subscription to authenticated;
 
 
+create or replace function cdc.quote_wal2json(entity regclass)
+    returns text
+    language sql
+    immutable
+    strict
+as $$
+    select
+        (
+            select string_agg('\' || ch,'')
+            from unnest(string_to_array(nsp.nspname::text, null)) with ordinality x(ch, idx)
+            where
+                not (x.idx = 1 and x.ch = '"')
+                and not (
+                    x.idx = array_length(string_to_array(nsp.nspname::text, null), 1)
+                    and x.ch = '"'
+                )
+        )
+        || '.'
+        || (
+            select string_agg('\' || ch,'')
+            from unnest(string_to_array(pc.relname::text, null)) with ordinality x(ch, idx)
+            where
+                not (x.idx = 1 and x.ch = '"')
+                and not (
+                    x.idx = array_length(string_to_array(nsp.nspname::text, null), 1)
+                    and x.ch = '"'
+                )
+        )
+    from
+        pg_class pc
+        join pg_namespace nsp
+            on pc.relnamespace = nsp.oid
+    where
+        pc.oid = entity
+$$;
+
+
 create or replace function cdc.check_equality_op(
     op cdc.equality_op,
     type_ regtype,
