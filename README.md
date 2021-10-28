@@ -242,8 +242,9 @@ with pub as (
         pp.pubname pub_name,
         bool_or(puballtables) pub_all_tables,
         (
-            select string_agg(act.name_, ',') actions
-             from
+            select
+                string_agg(act.name_, ',') actions
+            from
                 unnest(array[
                     case when bool_or(pubinsert) then 'insert' else null end,
                     case when bool_or(pubupdate) then 'update' else null end,
@@ -257,7 +258,7 @@ with pub as (
         left join pg_publication_rel ppr
             on pp.oid = ppr.prpubid
     where
-        pp.pubname = 'realtime' -- publication name here
+        pp.pubname = 'supabase_realtime'
     group by
         pp.pubname
     limit 1
@@ -281,9 +282,8 @@ from
                 'include-timestamp', 'true',
                 'write-in-chunks', 'true',
                 'format-version', '2',
-                'actions', pub.w2j_actions,
-                case when pub.pub_all_tables then 'filter-tables' else 'add-tables' end,
-                case when pub.pub_all_tables then 'cdc.*,auth.*' else pub.w2j_add_tables end
+                'actions', coalesce(pub.w2j_actions, ''),
+                'add-tables', coalesce(pub.w2j_add_tables, '')
             )
     ) w2j,
     lateral (
@@ -295,6 +295,10 @@ from
         from
             cdc.apply_rls(w2j.data::jsonb) x(wal, is_rls_enabled, users, errors)
     ) xyz
+where
+    pub.pub_all_tables
+    or (pub.pub_all_tables is false and pub.w2j_add_tables is not null)
+
 ```
 
 ## Installation

@@ -66,7 +66,9 @@ create table public.note(
 );
 create index ix_note_user_id on public.note (user_id);
 
-create publication realtime for table public.note with (publish = 'insert,update,delete,truncate');
+drop publication if exists supabase_realtime;
+
+create publication supabase_realtime for table public.note with (publish = 'insert,update,delete,truncate');
             """
         )
     )
@@ -97,7 +99,7 @@ select * from pg_create_logical_replication_slot('realtime', 'wal2json', false);
         """
     drop schema public cascade;
     create schema public;
-    drop publication realtime;
+    drop publication supabase_realtime;
     """
     )
     conn.execute(
