@@ -198,9 +198,13 @@ Given a `wal2json` replication slot with the name `realtime`
 select * from pg_create_logical_replication_slot('realtime', 'wal2json')
 ```
 
-The stream can be accessed via
+A complete list of config options can be found [here](https://github.com/eulerto/wal2json):
+
+The stream can be polled with
 
 ```sql
+set search_path = '';
+
 select
     xyz.wal,
     xyz.is_rls_enabled,
@@ -228,7 +232,74 @@ from
     ) xyz
 ```
 
-A complete list of config options can be found [here](https://github.com/eulerto/wal2json):
+Or, if the stream should be filtered according to a publication:
+
+```sql
+set search_path = '';
+
+with pub as (
+    select
+        pp.pubname pub_name,
+        bool_or(puballtables) pub_all_tables,
+        (
+            select
+                string_agg(act.name_, ',') actions
+            from
+                unnest(array[
+                    case when bool_or(pubinsert) then 'insert' else null end,
+                    case when bool_or(pubupdate) then 'update' else null end,
+                    case when bool_or(pubdelete) then 'delete' else null end,
+                    case when bool_or(pubtruncate) then 'truncate' else null end
+                ]) act(name_)
+        ) w2j_actions,
+        string_agg(prrelid::regclass::text, ',') w2j_add_tables
+    from
+        pg_publication pp
+        left join pg_publication_rel ppr
+            on pp.oid = ppr.prpubid
+    where
+        pp.pubname = 'supabase_realtime'
+    group by
+        pp.pubname
+    limit 1
+)
+
+select
+    xyz.wal,
+    xyz.is_rls_enabled,
+    xyz.users,
+    xyz.errors
+from
+    pub,
+    lateral (
+        select
+            *
+        from
+            pg_logical_slot_get_changes(
+                'realtime', null, null,
+                'include-pk', '1',
+                'include-transaction', 'false',
+                'include-timestamp', 'true',
+                'write-in-chunks', 'true',
+                'format-version', '2',
+                'actions', coalesce(pub.w2j_actions, ''),
+                'add-tables', coalesce(pub.w2j_add_tables, '')
+            )
+    ) w2j,
+    lateral (
+        select
+            x.wal,
+            x.is_rls_enabled,
+            x.users,
+            x.errors
+        from
+            cdc.apply_rls(w2j.data::jsonb) x(wal, is_rls_enabled, users, errors)
+    ) xyz
+where
+    pub.pub_all_tables
+    or (pub.pub_all_tables is false and pub.w2j_add_tables is not null)
+
+```
 
 ## Installation
 

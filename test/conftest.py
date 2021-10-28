@@ -51,28 +51,33 @@ def sess(engine):
     conn.execute(
         text(
             """
-select * from pg_create_logical_replication_slot('realtime', 'wal2json');
+set search_path = '';
 
-create or replace function benchmark(sql text, n int)
-  returns interval
-  language plpgsql AS
-$$
-/*
-	Benchmark an idempotent SQL statement
-*/
-declare
-   i int;
-   start_time timestamp;
-begin
-    start_time := clock_timestamp();
-	for i in 1 .. n loop
-		-- UNSAFE
-		execute sql;
-	end loop;
-	return (clock_timestamp() - start_time) / n;
-end
-$$;
+create table public.note(
+    id bigserial primary key,
+    user_id uuid not null references auth.users(id),
+    body text not null,
+    arr_text text[] not null default array['one', 'two'],
+    arr_int int[] not null default array[1, 2],
+
+    -- dummy column with revoked select for "authenticated"
+    dummy text
+
+);
+create index ix_note_user_id on public.note (user_id);
+
+drop publication if exists supabase_realtime;
+
+create publication supabase_realtime for table public.note with (publish = 'insert,update,delete,truncate');
             """
+        )
+    )
+    conn.execute(text("commit"))
+    conn.execute(
+        text(
+            """
+select * from pg_create_logical_replication_slot('realtime', 'wal2json', false);
+    """
         )
     )
     conn.execute(text("commit"))
@@ -94,6 +99,7 @@ $$;
         """
     drop schema public cascade;
     create schema public;
+    drop publication supabase_realtime;
     """
     )
     conn.execute(

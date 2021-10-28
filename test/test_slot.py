@@ -69,23 +69,56 @@ class UpdateWAL(BaseWAL):
 
 QUERY = text(
     """
+with pub as (
+    select
+        pp.pubname pub_name,
+        bool_or(puballtables) pub_all_tables,
+        (
+            select
+                string_agg(act.name_, ',') actions
+            from
+                unnest(array[
+                    case when bool_or(pubinsert) then 'insert' else null end,
+                    case when bool_or(pubupdate) then 'update' else null end,
+                    case when bool_or(pubdelete) then 'delete' else null end,
+                    case when bool_or(pubtruncate) then 'truncate' else null end
+                ]) act(name_)
+        ) w2j_actions,
+        string_agg(prrelid::regclass::text, ',') w2j_add_tables
+    from
+        pg_publication pp
+        left join pg_publication_rel ppr
+            on pp.oid = ppr.prpubid
+    where
+        pp.pubname = 'supabase_realtime'
+    group by
+        pp.pubname
+    limit 1
+)
+
 select
-    data::jsonb,
+    w2j.data::jsonb raw,
     xyz.wal,
     xyz.is_rls_enabled,
     xyz.users,
     xyz.errors
 from
-    pg_logical_slot_get_changes(
-        'realtime', null, null,
-        'include-pk', '1',
-        'include-transaction', 'false',
-        'include-timestamp', 'true',
-        'write-in-chunks', 'true',
-        'format-version', '2',
-        'actions', 'insert,update,delete,truncate',
-        'filter-tables', 'cdc.*,auth.*'
-    ),
+    pub,
+    lateral (
+        select
+            *
+        from
+            pg_logical_slot_get_changes(
+                'realtime', null, null,
+                'include-pk', '1',
+                'include-transaction', 'false',
+                'include-timestamp', 'true',
+                'write-in-chunks', 'true',
+                'format-version', '2',
+                'actions', coalesce(pub.w2j_actions, ''),
+                'add-tables', coalesce(pub.w2j_add_tables, '')
+            )
+    ) w2j,
     lateral (
         select
             x.wal,
@@ -93,8 +126,11 @@ from
             x.users,
             x.errors
         from
-            cdc.apply_rls(data::jsonb) x(wal, is_rls_enabled, users, errors)
+            cdc.apply_rls(w2j.data::jsonb) x(wal, is_rls_enabled, users, errors)
     ) xyz
+where
+    pub.pub_all_tables
+    or (pub.pub_all_tables is false and pub.w2j_add_tables is not null)
 """
 )
 
@@ -110,22 +146,8 @@ def setup_note(sess):
     sess.execute(
         text(
             """
-create table public.note(
-    id bigserial primary key,
-    user_id uuid not null references auth.users(id),
-    body text not null,
-    arr_text text[] not null default array['one', 'two'],
-    arr_int int[] not null default array[1, 2],
-
-    -- dummy column with revoked select for "authenticated"
-    dummy text
-
-);
-create index ix_note_user_id on public.note (user_id);
-
 revoke select on public.note from authenticated;
 grant select (id, user_id, body, arr_text, arr_int) on public.note to authenticated;
-
     """
         )
     )
@@ -142,7 +164,7 @@ on public.note
 to authenticated
 using (auth.uid() = user_id);
 
-alter table note enable row level security;
+alter table public.note enable row level security;
     """
         )
     )
