@@ -84,7 +84,7 @@ with pub as (
                     case when bool_or(pubtruncate) then 'truncate' else null end
                 ]) act(name_)
         ) w2j_actions,
-        string_agg(prrelid::regclass::text, ',') w2j_add_tables
+        string_agg(cdc.quote_wal2json(prrelid::regclass), ',') w2j_add_tables
     from
         pg_publication pp
         left join pg_publication_rel ppr
