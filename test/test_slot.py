@@ -126,7 +126,10 @@ from
             x.users,
             x.errors
         from
-            cdc.apply_rls(w2j.data::jsonb) x(wal, is_rls_enabled, users, errors)
+            cdc.apply_rls(
+                wal := w2j.data::jsonb,
+                max_record_bytes := 1024*1024
+            ) x(wal, is_rls_enabled, users, errors)
     ) xyz
 where
     pub.pub_all_tables
@@ -237,8 +240,9 @@ def test_read_wal_w_visible_to_no_rls(sess):
     insert_subscriptions(sess)
     clear_wal(sess)
     insert_notes(sess)
-    _, wal, is_rls_enabled, users, _ = sess.execute(QUERY).one()
+    _, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
     InsertWAL.parse_obj(wal)
+    assert errors == []
     assert not is_rls_enabled
     # visible_to includes subscribed user when no rls enabled
     assert len(users) == 1
@@ -256,6 +260,7 @@ def test_read_wal_w_visible_to_has_rls(sess):
     sess.commit()
     _, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
     InsertWAL.parse_obj(wal)
+    assert errors == []
     assert wal["record"]["id"] == 1
     assert wal["record"]["arr_text"] == ["one", "two"]
     assert wal["record"]["arr_int"] == [1, 2]
@@ -314,8 +319,9 @@ def test_wal_update_changed_identity(sess):
     clear_wal(sess)
     sess.execute("update public.note set id = 99")
     sess.commit()
-    raw, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
+    _, wal, _, _, errors = sess.execute(QUERY).one()
     UpdateWAL.parse_obj(wal)
+    assert errors == []
     assert wal["record"]["id"] == 99
     assert wal["record"]["body"] == "some body"
     assert wal["old_record"]["id"] == 1
@@ -330,8 +336,9 @@ def test_wal_truncate(sess):
     clear_wal(sess)
     sess.execute("truncate table public.note;")
     sess.commit()
-    raw, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
+    _, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
     TruncateWAL.parse_obj(wal)
+    assert errors == []
     assert is_rls_enabled
     assert len(users) == 2
 
@@ -345,10 +352,27 @@ def test_wal_delete(sess):
     clear_wal(sess)
     sess.execute("delete from public.note;")
     sess.commit()
-    raw, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
+    _, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
     DeleteWAL.parse_obj(wal)
+    assert errors == []
     assert wal["old_record"]["id"] == 1
     assert is_rls_enabled
+    assert len(users) == 2
+
+
+def test_error_413_payload_too_large(sess):
+    insert_users(sess)
+    setup_note(sess)
+    insert_subscriptions(sess, n=2)
+    insert_notes(sess, n=1)
+    clear_wal(sess)
+    sess.execute("update public.note set body = repeat('a', 5 * 1024 * 1024);")
+    sess.commit()
+    _, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
+    UpdateWAL.parse_obj(wal)
+    assert any(["413" in x for x in errors])
+    assert wal["old_record"] == {}
+    assert wal["record"] == {}
     assert len(users) == 2
 
 

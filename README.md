@@ -301,6 +301,18 @@ where
 
 ```
 
+## Configuration
+
+### max_record_bytes
+
+`max_record_bytes` (default 1MB): Controls the maximum size of a WAL record that will be emitted with complete `record` and `old_record` data. When the size of the wal2json record exceeds `max_record_bytes` the `record` and `old_record` keys are set as empty objects `{}` and the `errors` output array will contain the string `"Error 413: Payload Too Large"`
+
+Ex:
+```sql
+cdc.apply_rls(wal := w2j.data::jsonb, max_record_bytes := 1024*1024) x(wal, is_rls_enabled, users, errors)
+```
+
+
 ## Installation
 
 The project is SQL only and can be installed by executing the contents of `sql/walrus--0.1.sql` in a database instance.

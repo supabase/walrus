@@ -269,7 +269,7 @@ Should the record be visible (true) or filtered out (false) after *filters* are 
 $$;
 
 
-create or replace function cdc.apply_rls(wal jsonb)
+create or replace function cdc.apply_rls(wal jsonb, max_record_bytes int = 1024 * 1024)
     returns cdc.wal_rls
     language plpgsql
     volatile
@@ -340,6 +340,14 @@ declare
                 on (x ->> 'name') = (pks ->> 'name');
 
     output jsonb;
+
+    -- Error states
+    error_record_exceeds_max_size boolean = octet_length(wal::text) > max_record_bytes;
+
+    errors text[] = case
+        when error_record_exceeds_max_size then array['Error 413: Payload Too Large']
+        else '{}'::text[]
+    end;
 begin
 
     -------------------------------
@@ -371,6 +379,7 @@ begin
     )
     -- Add "record" key for insert and update
     || case
+        when error_record_exceeds_max_size then jsonb_build_object('record', '{}'::jsonb)
         when action in ('INSERT', 'UPDATE') then
             jsonb_build_object(
                 'record',
@@ -380,6 +389,7 @@ begin
     end
     -- Add "old_record" key for update and delete
     || case
+        when error_record_exceeds_max_size then jsonb_build_object('old_record', '{}'::jsonb)
         when action in ('UPDATE', 'DELETE') then
             jsonb_build_object(
                 'old_record',
@@ -443,7 +453,7 @@ begin
         output,
         is_rls_enabled,
         visible_to_user_ids,
-        array[]::text[]
+        errors
     )::cdc.wal_rls;
 end;
 $$;
