@@ -184,7 +184,7 @@ Important Notes:
 ## Error States
 
 ### Unauthorized 401
-If a WAL record is passed through `cdc.apply_rls` and the `authenticated` role does not have permission to `select` and of the columns in that table, an `Unauthorized` error is returned with no WAL data.
+If a WAL record is passed through `cdc.apply_rls` and the `authenticated` role does not have permission to `select` any of the columns in that table, an `Unauthorized` error is returned with no WAL data.
 
 ```sql
 (
