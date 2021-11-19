@@ -181,6 +181,20 @@ Important Notes:
 - The key/value pairs displayed in the `old_record` field include the table's identity columns for the record being updated/deleted. To display all values in `old_record` set the replica identity for the table to full
 - When a delete occurs, the contents of `old_record` will be broadcast to all subscribers to that table so ensure that each table's replica identity only contains information that is safe to expose publicly
 
+## Error States
+
+### Unauthorized 401
+If a WAL record is passed through `cdc.apply_rls` and the `authenticated` role does not have permission to `select` and of the columns in that table, an `Unauthorized` error is returned with no WAL data.
+
+```sql
+(
+    null, -- wal
+    null, -- is_rls_enabled
+    [],   -- users,
+    array['Error 401: Unauthorized'] -- errors
+)::cdc.wal_rls;
+```
+
 
 ## How it Works
 
