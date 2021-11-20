@@ -181,6 +181,33 @@ Important Notes:
 - The key/value pairs displayed in the `old_record` field include the table's identity columns for the record being updated/deleted. To display all values in `old_record` set the replica identity for the table to full
 - When a delete occurs, the contents of `old_record` will be broadcast to all subscribers to that table so ensure that each table's replica identity only contains information that is safe to expose publicly
 
+## Error States
+
+### Error 401: Unauthorized
+If a WAL record is passed through `cdc.apply_rls` and the `authenticated` role does not have permission to `select` any of the columns in that table, an `Unauthorized` error is returned with no WAL data.
+
+Ex:
+```sql
+(
+    null,                            -- wal
+    null,                            -- is_rls_enabled
+    [],                              -- users,
+    array['Error 401: Unauthorized'] -- errors
+)::cdc.wal_rls;
+```
+
+### Error 413: Payload Too Large
+When the size of the wal2json record exceeds `max_record_bytes` the `record` and `old_record` keys are set as empty objects `{}` and the `errors` output array will contain the string `"Error 413: Payload Too Large"`
+
+Ex:
+```sql
+(
+    {..., "record": {}, "old_record": {}}, -- wal
+    true,                                  -- is_rls_enabled
+    [...],                                 -- users,
+    array['Error 413: Payload Too Large']  -- errors
+)::cdc.wal_rls;
+```
 
 ## How it Works
 

@@ -250,6 +250,40 @@ def test_read_wal_w_visible_to_no_rls(sess):
     assert [x for x in wal["columns"] if x["name"] == "id"][0]["type"] == "int8"
 
 
+def test_unauthorized_returns_error(sess):
+    sess.execute(
+        text(
+            """
+revoke select on public.unauthorized from authenticated;
+    """
+        )
+    )
+    insert_users(sess)
+    sess.execute(
+        text(
+            """
+insert into cdc.subscription(user_id, entity)
+select id, 'public.unauthorized' from auth.users order by id limit 1;
+    """
+        )
+    )
+    sess.commit()
+    clear_wal(sess)
+    sess.execute(
+        text(
+            """
+insert into public.unauthorized(id)
+values (1)
+    """
+        )
+    )
+    sess.commit()
+    _, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
+    assert (wal, is_rls_enabled, users) == (None, None, [])
+    assert len(errors) == 1
+    assert errors[0] == "Error 401: Unauthorized"
+
+
 def test_read_wal_w_visible_to_has_rls(sess):
     insert_users(sess)
     setup_note(sess)

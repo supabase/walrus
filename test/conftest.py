@@ -66,9 +66,22 @@ create table public.note(
 );
 create index ix_note_user_id on public.note (user_id);
 
+create table public.unauthorized(
+    id bigserial primary key
+);
+
+
 drop publication if exists supabase_realtime;
 
-create publication supabase_realtime for table public.note with (publish = 'insert,update,delete,truncate');
+
+create publication
+    supabase_realtime
+for table
+    public.note,
+    public.unauthorized
+with (
+    publish = 'insert,update,delete,truncate'
+);
             """
         )
     )
