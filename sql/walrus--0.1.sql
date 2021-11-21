@@ -414,10 +414,7 @@ begin
     else
         -- If RLS is on and someone is subscribed to the table prep
         if is_rls_enabled and array_length(subscriptions, 1) > 0 then
-            perform
-                set_config('role', 'authenticated', true),
-                set_config('request.jwt.claim.role', 'authenticated', true);
-
+            perform set_config('role', 'authenticated', true);
             if (select 1 from pg_prepared_statements where name = 'walrus_rls_stmt' limit 1) > 0 then
                 deallocate walrus_rls_stmt;
             end if;
@@ -442,8 +439,15 @@ begin
                 else
                     -- Check if RLS allows the user to see the record
                     perform
-                        set_config('request.jwt.claim.sub', user_id::text, true),
-                        set_config('request.jwt.claim.email', email::text, true);
+                        set_config(
+                            'request.jwt.claims',
+                            jsonb_build_object(
+                                'sub', user_id::text,
+                                'email', email::text,
+                                'role', 'authenticated'
+                            )::text,
+                            true
+                        );
                     execute 'execute walrus_rls_stmt' into user_has_access;
 
                     if user_has_access then
