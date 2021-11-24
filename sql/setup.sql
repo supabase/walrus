@@ -99,16 +99,30 @@ VALUES  ('20171026211738'),
         ('20180125194653');
 -- Gets the User ID from the request cookie
 create or replace function auth.uid() returns uuid as $$
-  select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid;
+    select
+        coalesce(
+            current_setting('request.jwt.claim.sub', true),
+            current_setting('request.jwt.claims', true)::jsonb ->> 'sub'
+        )::uuid;
 $$ language sql stable;
 -- Gets the User Role from the request cookie
 create or replace function auth.role() returns text as $$
-  select nullif(current_setting('request.jwt.claim.role', true), '')::text;
+  select
+        coalesce(
+            current_setting('request.jwt.claim.role', true),
+            current_setting('request.jwt.claims', true)::jsonb ->> 'role'
+        )::text;
 $$ language sql stable;
+
 -- Gets the User Email from the request cookie
 create or replace function auth.email() returns text as $$
-  select nullif(current_setting('request.jwt.claim.email', true), '')::text;
+  select
+        coalesce(
+            current_setting('request.jwt.claim.email', true),
+            current_setting('request.jwt.claims', true)::jsonb ->> 'email'
+        )::text;
 $$ language sql stable;
+
 GRANT ALL PRIVILEGES ON SCHEMA auth TO postgres;
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA auth TO postgres;
 GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA auth TO postgres;
