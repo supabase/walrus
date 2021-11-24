@@ -101,16 +101,16 @@ VALUES  ('20171026211738'),
 create or replace function auth.uid() returns uuid as $$
     select
         coalesce(
-            nullif(current_setting('request.jwt.claim.sub', true), ''),
-            nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub'
+            current_setting('request.jwt.claim.sub', true),
+            current_setting('request.jwt.claims', true)::jsonb ->> 'sub'
         )::uuid;
 $$ language sql stable;
 -- Gets the User Role from the request cookie
 create or replace function auth.role() returns text as $$
   select
         coalesce(
-            nullif(current_setting('request.jwt.claim.role', true), ''),
-            nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role'
+            current_setting('request.jwt.claim.role', true),
+            current_setting('request.jwt.claims', true)::jsonb ->> 'role'
         )::text;
 $$ language sql stable;
 
@@ -118,8 +118,8 @@ $$ language sql stable;
 create or replace function auth.email() returns text as $$
   select
         coalesce(
-            nullif(current_setting('request.jwt.claim.email', true), ''),
-            nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'email'
+            current_setting('request.jwt.claim.email', true),
+            current_setting('request.jwt.claims', true)::jsonb ->> 'email'
         )::text;
 $$ language sql stable;
 
