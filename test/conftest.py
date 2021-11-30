@@ -55,7 +55,7 @@ set search_path = '';
 
 create table public.note(
     id bigserial primary key,
-    user_id uuid not null references auth.users(id),
+    user_id uuid not null,
     body text not null,
     arr_text text[] not null default array['one', 'two'],
     arr_int int[] not null default array[1, 2],
@@ -117,12 +117,11 @@ select * from pg_create_logical_replication_slot('realtime', 'wal2json', false);
     )
     conn.execute(
         """
-    grant usage on schema public to postgres, anon, authenticated, service_role;
-    alter default privileges in schema public grant all on tables to postgres, anon, authenticated, service_role;
-    alter default privileges in schema public grant all on functions to postgres, anon, authenticated, service_role;
-    alter default privileges in schema public grant all on sequences to postgres, anon, authenticated, service_role;
+    grant usage on schema public to authenticated;
+    alter default privileges in schema public grant all on tables to authenticated;
+    alter default privileges in schema public grant all on functions to authenticated;
+    alter default privileges in schema public grant all on sequences to authenticated;
     truncate table cdc.subscription cascade;
-    truncate table auth.users cascade;
     """
     )
     conn.execute(text("commit"))

@@ -25,7 +25,7 @@ User subscriptions are managed through a table
 ```sql
 create table cdc.subscription (
     id bigint not null generated always as identity,
-    user_id uuid not null references auth.users(id),
+    user_id uuid not null,
     entity regclass not null,
     filters cdc.user_defined_filter[],
     created_at timestamp not null default timezone('utc', now()),
@@ -213,7 +213,7 @@ Ex:
 
 Each WAL record is passed into `cdc.apply_rls(jsonb)` which:
 
-- impersonates each subscribed user by setting the role to `authenticated` and `request.jwt.claim.sub` to the subcribed user's id
+- impersonates each subscribed user by setting `request.jwt.claims` to an object with `sub` (user's id), `email` (user's email), and `role` ('authenticated')
 - queries for the row using its primary key values
 - applies the subscription's filters to check if the WAL record is filtered out
 - filters out all columns that are not visible to the `authenticated` role
@@ -246,7 +246,7 @@ from
         'write-in-chunks', 'true',
         'format-version', '2',
         'actions', 'insert,update,delete,truncate',
-        'filter-tables', 'cdc.*,auth.*'
+        'filter-tables', 'cdc.*'
     ),
     lateral (
         select

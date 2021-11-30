@@ -174,28 +174,15 @@ alter table public.note enable row level security;
     sess.commit()
 
 
-def insert_users(sess, n=10):
-    sess.execute(
-        text(
-            """
-insert into auth.users(id)
-select extensions.uuid_generate_v4() from generate_series(1,:n);
-    """
-        ),
-        {"n": n},
-    )
-    sess.commit()
-
-
 def insert_subscriptions(sess, filters: Dict[str, Any] = {}, n=1):
     sess.execute(
         text(
             """
 insert into cdc.subscription(user_id, entity)
-select id, 'public.note' from auth.users order by id limit :lim;
+select extensions.uuid_generate_v4(), 'public.note' from generate_series(1,:n);
     """
         ),
-        {"lim": n},
+        {"n": n},
     )
     sess.commit()
 
@@ -205,7 +192,7 @@ def insert_notes(sess, body="take out the trash", n=1):
         text(
             """
 insert into public.note(user_id, body)
-select id, :body from auth.users order by id limit :n;
+select user_id, :body from cdc.subscription order by id limit :n;
     """
         ),
         {"n": n, "body": body},
@@ -215,7 +202,7 @@ select id, :body from auth.users order by id limit :n;
 
 def test_read_wal(sess):
     setup_note(sess)
-    insert_users(sess)
+    insert_subscriptions(sess)
     clear_wal(sess)
     insert_notes(sess, 1)
     raw, *_ = sess.execute(QUERY).one()
@@ -223,8 +210,8 @@ def test_read_wal(sess):
 
 
 def test_check_wal2json_settings(sess):
-    insert_users(sess)
     setup_note(sess)
+    insert_subscriptions(sess)
     clear_wal(sess)
     insert_notes(sess, 1)
     sess.commit()
@@ -236,7 +223,6 @@ def test_check_wal2json_settings(sess):
 
 def test_read_wal_w_visible_to_no_rls(sess):
     setup_note(sess)
-    insert_users(sess)
     insert_subscriptions(sess)
     clear_wal(sess)
     insert_notes(sess)
@@ -258,12 +244,11 @@ revoke select on public.unauthorized from authenticated;
     """
         )
     )
-    insert_users(sess)
     sess.execute(
         text(
             """
 insert into cdc.subscription(user_id, entity)
-select id, 'public.unauthorized' from auth.users order by id limit 1;
+select extensions.uuid_generate_v4(), 'public.unauthorized';
     """
         )
     )
@@ -285,7 +270,6 @@ values (1)
 
 
 def test_read_wal_w_visible_to_has_rls(sess):
-    insert_users(sess)
     setup_note(sess)
     setup_note_rls(sess)
     insert_subscriptions(sess, n=2)
@@ -315,7 +299,6 @@ def test_read_wal_w_visible_to_has_rls(sess):
 
 
 def test_wal_update(sess):
-    insert_users(sess)
     setup_note(sess)
     setup_note_rls(sess)
     insert_subscriptions(sess, n=2)
@@ -345,7 +328,6 @@ def test_wal_update(sess):
 
 
 def test_wal_update_changed_identity(sess):
-    insert_users(sess)
     setup_note(sess)
     setup_note_rls(sess)
     insert_subscriptions(sess, n=2)
@@ -362,7 +344,6 @@ def test_wal_update_changed_identity(sess):
 
 
 def test_wal_truncate(sess):
-    insert_users(sess)
     setup_note(sess)
     setup_note_rls(sess)
     insert_subscriptions(sess, n=2)
@@ -378,7 +359,6 @@ def test_wal_truncate(sess):
 
 
 def test_wal_delete(sess):
-    insert_users(sess)
     setup_note(sess)
     setup_note_rls(sess)
     insert_subscriptions(sess, n=2)
@@ -395,7 +375,6 @@ def test_wal_delete(sess):
 
 
 def test_error_413_payload_too_large(sess):
-    insert_users(sess)
     setup_note(sess)
     insert_subscriptions(sess, n=2)
     insert_notes(sess, n=1)
@@ -434,7 +413,6 @@ def test_error_413_payload_too_large(sess):
     ],
 )
 def test_user_defined_eq_filter(filter_str, is_true, sess):
-    insert_users(sess)
     setup_note(sess)
     setup_note_rls(sess)
 
@@ -443,12 +421,9 @@ def test_user_defined_eq_filter(filter_str, is_true, sess):
         f"""
 insert into cdc.subscription(user_id, entity, filters)
 select
-    id,
+    extensions.uuid_generate_v4(),
     'public.note',
-    array[{filter_str}]::cdc.user_defined_filter[]
-from
-    auth.users order by id
-limit 1;
+    array[{filter_str}]::cdc.user_defined_filter[];
     """
     )
     sess.commit()
@@ -462,7 +437,6 @@ limit 1;
 @pytest.mark.performance
 @pytest.mark.parametrize("rls_on", [False, True])
 def test_performance_on_n_recs_n_subscribed(sess, rls_on: bool):
-    insert_users(sess, n=10000)
     setup_note(sess)
     if rls_on:
         setup_note_rls(sess)
@@ -505,7 +479,7 @@ def test_performance_on_n_recs_n_subscribed(sess, rls_on: bool):
                     'include-pk', '1',
                     'include-transaction', 'false',
                     'format-version', '2',
-                    'filter-tables', 'cdc.*,auth.*'
+                    'filter-tables', 'cdc.*'
                 )
             """
                 )
