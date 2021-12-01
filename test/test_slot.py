@@ -84,7 +84,19 @@ with pub as (
                     case when bool_or(pubtruncate) then 'truncate' else null end
                 ]) act(name_)
         ) w2j_actions,
-        string_agg(cdc.quote_wal2json(prrelid::regclass), ',') w2j_add_tables
+        case
+            -- collect all tables
+            when bool_and(puballtables) then (
+                select
+                    string_agg(cdc.quote_wal2json((schemaname || '.' || tablename)::regclass), ',')
+                from
+                    pg_tables
+                where
+                    schemaname not in ('cdc', 'pg_catalog', 'information_schema')
+            )
+            -- null when no tables are in the publication
+            else string_agg(cdc.quote_wal2json(prrelid::regclass), ',')
+        end w2j_add_tables
     from
         pg_publication pp
         left join pg_publication_rel ppr
@@ -132,8 +144,7 @@ from
             ) x(wal, is_rls_enabled, users, errors)
     ) xyz
 where
-    pub.pub_all_tables
-    or (pub.pub_all_tables is false and pub.w2j_add_tables is not null)
+    coalesce(pub.w2j_add_tables, '') <> ''
 """
 )
 

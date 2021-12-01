@@ -34,7 +34,7 @@ DEV_REQUIRES = [
 
 
 setuptools.setup(
-    name="pg_graphql",
+    name="walrus",
     version="0.0.1",
     classifiers=[
         "Development Status :: 4 - Beta",
