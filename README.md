@@ -283,7 +283,7 @@ with pub as (
             -- collect all tables
             when bool_and(puballtables) then (
                 select
-                    string_agg(cdc.quote_wal2json((schemaname || '.' || tablename)::regclass), ',')
+                    string_agg(cdc.quote_wal2json((format('%I.%I', schemaname, tablename)::regclass), ',')
                 from
                     pg_tables
                 where
