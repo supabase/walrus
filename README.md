@@ -56,7 +56,7 @@ values ('832bd278-dac7-4bef-96be-e21c8a0023c4', 'public.notes', array[('id', 'eq
 
 ### Reading WAL
 
-This package exposes 1 public SQL function `cdc.apply_rls(jsonb)`. It processes the output of a `wal2json` decoded logical replication slot and returns:
+This package exposes 1 public SQL function `cdc.apply_rls(jsonb)`. It processes the output of a `wal2json` decoded logical repliaction slot and returns:
 
 - `wal`: (jsonb) The WAL record as JSONB in the form
 - `is_rls_enabled`: (bool) If the entity (table) the WAL record represents has row level security enabled
@@ -266,43 +266,24 @@ set search_path = '';
 
 with pub as (
     select
-        pp.pubname pub_name,
-        bool_or(puballtables) pub_all_tables,
-        (
-            select
-                string_agg(act.name_, ',') actions
-            from
-                unnest(array[
-                    case when bool_or(pubinsert) then 'insert' else null end,
-                    case when bool_or(pubupdate) then 'update' else null end,
-                    case when bool_or(pubdelete) then 'delete' else null end,
-                    case when bool_or(pubtruncate) then 'truncate' else null end
-                ]) act(name_)
-        ) w2j_actions,
-        case
-            -- collect all tables
-            when bool_and(puballtables) then (
-                select
-                    string_agg(cdc.quote_wal2json((format('%I.%I', schemaname, tablename)::regclass), ',')
-                from
-                    pg_tables
-                where
-                    schemaname not in ('cdc', 'pg_catalog', 'information_schema')
-            )
-            -- null when no tables are in the publication
-            else string_agg(cdc.quote_wal2json(prrelid::regclass), ',')
-        end w2j_add_tables
+        concat_ws(
+            ',',
+            case when bool_or(pubinsert) then 'insert' else null end,
+            case when bool_or(pubupdate) then 'update' else null end,
+            case when bool_or(pubdelete) then 'delete' else null end,
+            case when bool_or(pubtruncate) then 'truncate' else null end
+        ) as w2j_actions,
+        string_agg(cdc.quote_wal2json(format('%I.%I', schemaname, tablename)::regclass), ',') w2j_add_tables
     from
         pg_publication pp
-        left join pg_publication_rel ppr
-            on pp.oid = ppr.prpubid
+        join pg_publication_tables ppt
+            on pp.pubname = ppt.pubname
     where
         pp.pubname = 'supabase_realtime'
     group by
         pp.pubname
     limit 1
 )
-
 select
     xyz.wal,
     xyz.is_rls_enabled,
@@ -311,10 +292,10 @@ select
 from
     pub,
     lateral (
-        select
+          select
             *
-        from
-            pg_logical_slot_get_changes(
+          from
+             pg_logical_slot_get_changes(
                 'realtime', null, null,
                 'include-pk', '1',
                 'include-transaction', 'false',
@@ -322,7 +303,7 @@ from
                 'write-in-chunks', 'true',
                 'format-version', '2',
                 'actions', coalesce(pub.w2j_actions, ''),
-                'add-tables', coalesce(pub.w2j_add_tables, '')
+                'add-tables', pub.w2j_add_tables
             )
     ) w2j,
     lateral (
@@ -332,7 +313,10 @@ from
             x.users,
             x.errors
         from
-            cdc.apply_rls(w2j.data::jsonb) x(wal, is_rls_enabled, users, errors)
+            cdc.apply_rls(
+                wal := w2j.data::jsonb,
+                max_record_bytes := 1048576
+            ) x(wal, is_rls_enabled, users, errors)
     ) xyz
 where
     coalesce(pub.w2j_add_tables, '') <> ''
