@@ -16,6 +16,20 @@ create type cdc.equality_op as enum(
 create type cdc.action as enum ('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'ERROR');
 
 
+create function cdc.cast(val text, type_ regtype)
+    returns jsonb
+    immutable
+    language plpgsql
+as $$
+declare
+    res jsonb;
+begin
+    execute format('select to_jsonb(%L::'|| type_::text || ')', val)  into res;
+    return res;
+end
+$$;
+
+
 create type cdc.user_defined_filter as (
     column_name text,
     op cdc.equality_op,
@@ -59,7 +73,7 @@ declare
             (quote_ident(c.table_schema) || '.' || quote_ident(c.table_name))::regclass = new.entity
             and pg_catalog.has_column_privilege('authenticated', new.entity, c.column_name, 'SELECT');
     filter cdc.user_defined_filter;
-    col_type text;
+    col_type regtype;
 begin
     for filter in select * from unnest(new.filters) loop
         -- Filtered column is valid
@@ -73,12 +87,12 @@ begin
             from pg_catalog.pg_attribute
             where attrelid = new.entity
                   and attname = filter.column_name
-        )::text;
+        );
         if col_type is null then
             raise exception 'failed to lookup type for column %', filter.column_name;
         end if;
         -- raises an exception if value is not coercable to type
-        perform format('select %s::%I', filter.value, col_type);
+        perform cdc.cast(filter.value, col_type);
     end loop;
 
     -- Apply consistent order to filters so the unique constraint on
@@ -204,7 +218,7 @@ Example
             from
                 ' || entity || '
             where
-                ' || string_agg(quote_ident(pkc.name) || '=' || quote_nullable(pkc.value) , ' and ') || '
+                ' || string_agg(quote_ident(pkc.name) || '=' || quote_nullable(pkc.value #>> '{}') , ' and ') || '
         )'
     from
         unnest(columns) pkc
@@ -221,19 +235,6 @@ create type cdc.wal_rls as (
     users uuid[],
     errors text[]
 );
-
-create function cdc.cast(val text, type_ regtype)
-    returns jsonb
-    immutable
-    language plpgsql
-as $$
-declare
-    res jsonb;
-begin
-    execute format('select to_jsonb(%L::'|| type_::text || ')', val)  into res;
-    return res;
-end
-$$;
 
 
 
