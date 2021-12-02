@@ -71,31 +71,24 @@ QUERY = text(
     """
 with pub as (
     select
-        pp.pubname pub_name,
-        bool_or(puballtables) pub_all_tables,
-        (
-            select
-                string_agg(act.name_, ',') actions
-            from
-                unnest(array[
-                    case when bool_or(pubinsert) then 'insert' else null end,
-                    case when bool_or(pubupdate) then 'update' else null end,
-                    case when bool_or(pubdelete) then 'delete' else null end,
-                    case when bool_or(pubtruncate) then 'truncate' else null end
-                ]) act(name_)
-        ) w2j_actions,
-        string_agg(cdc.quote_wal2json(prrelid::regclass), ',') w2j_add_tables
+        concat_ws(
+            ',',
+            case when bool_or(pubinsert) then 'insert' else null end,
+            case when bool_or(pubupdate) then 'update' else null end,
+            case when bool_or(pubdelete) then 'delete' else null end,
+            case when bool_or(pubtruncate) then 'truncate' else null end
+        ) as w2j_actions,
+        string_agg(cdc.quote_wal2json(format('%I.%I', schemaname, tablename)::regclass), ',') w2j_add_tables
     from
         pg_publication pp
-        left join pg_publication_rel ppr
-            on pp.oid = ppr.prpubid
+        join pg_publication_tables ppt
+          on pp.pubname = ppt.pubname
     where
         pp.pubname = 'supabase_realtime'
     group by
         pp.pubname
     limit 1
 )
-
 select
     w2j.data::jsonb raw,
     xyz.wal,
@@ -105,21 +98,21 @@ select
 from
     pub,
     lateral (
-        select
-            *
-        from
-            pg_logical_slot_get_changes(
-                'realtime', null, null,
-                'include-pk', '1',
-                'include-transaction', 'false',
-                'include-timestamp', 'true',
-                'write-in-chunks', 'true',
-                'format-version', '2',
-                'actions', coalesce(pub.w2j_actions, ''),
-                'add-tables', coalesce(pub.w2j_add_tables, '')
-            )
+      select
+        *
+      from
+        pg_logical_slot_get_changes(
+            'realtime', null, null,
+            'include-pk', '1',
+            'include-transaction', 'false',
+            'include-timestamp', 'true',
+            'write-in-chunks', 'true',
+            'format-version', '2',
+            'actions', coalesce(pub.w2j_actions, ''),
+            'add-tables', pub.w2j_add_tables
+        )
     ) w2j,
-    lateral (
+      lateral (
         select
             x.wal,
             x.is_rls_enabled,
@@ -128,12 +121,11 @@ from
         from
             cdc.apply_rls(
                 wal := w2j.data::jsonb,
-                max_record_bytes := 1024*1024
+                max_record_bytes := 1048576
             ) x(wal, is_rls_enabled, users, errors)
     ) xyz
 where
-    pub.pub_all_tables
-    or (pub.pub_all_tables is false and pub.w2j_add_tables is not null)
+    coalesce(pub.w2j_add_tables, '') <> ''
 """
 )
 
