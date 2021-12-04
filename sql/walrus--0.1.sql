@@ -342,6 +342,11 @@ declare
     -- Error states
     error_record_exceeds_max_size boolean = octet_length(wal::text) > max_record_bytes;
     error_unauthorized boolean = not pg_catalog.has_any_column_privilege('authenticated', entity_, 'SELECT');
+    error_no_primary_key boolean = (
+        not exists(select 1 from jsonb_array_elements(wal -> 'pk'))
+        -- truncates do not contain pkey info
+        and action <> 'TRUNCATE'
+    );
 
     errors text[] = case
         when error_record_exceeds_max_size then array['Error 413: Payload Too Large']
@@ -356,6 +361,16 @@ begin
             null,
             visible_to_user_ids,
             array['Error 401: Unauthorized']
+        )::cdc.wal_rls;
+    end if;
+
+    -- Primary keys are required
+    if error_no_primary_key is true then
+        return (
+            null,
+            null,
+            visible_to_user_ids,
+            array['Error 400: Bad Request, no primary key']
         )::cdc.wal_rls;
     end if;
 

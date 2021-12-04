@@ -261,6 +261,28 @@ values (1)
     assert errors[0] == "Error 401: Unauthorized"
 
 
+def test_no_pkey_returns_error(sess):
+    setup_note(sess)
+    insert_subscriptions(sess, n=1)
+    sess.execute(
+        text(
+            """
+alter table public.note drop constraint note_pkey;
+    """
+        )
+    )
+    sess.commit()
+    clear_wal(sess)
+    insert_notes(sess)
+    sess.commit()
+    _, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
+    assert len(errors) == 1
+    assert errors[0] == "Error 400: Bad Request, no primary key"
+    assert wal is None
+    assert is_rls_enabled is None
+    assert users == []
+
+
 def test_read_wal_w_visible_to_has_rls(sess):
     setup_note(sess)
     setup_note_rls(sess)
