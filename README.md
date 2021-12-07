@@ -23,40 +23,40 @@ The subscription stream is based on logical replication slots.
 User subscriptions are managed through a table
 
 ```sql
-create table cdc.subscription (
+create table realtime.subscription (
     id bigint not null generated always as identity,
     user_id uuid not null,
     entity regclass not null,
-    filters cdc.user_defined_filter[],
+    filters realtime.user_defined_filter[],
     created_at timestamp not null default timezone('utc', now()),
     constraint pk_subscription primary key (id)
 );
 ```
-where `cdc.user_defined_filter` is
+where `realtime.user_defined_filter` is
 ```sql
-create type cdc.user_defined_filter as (
+create type realtime.user_defined_filter as (
     column_name text,
-    op cdc.equality_op,
+    op realtime.equality_op,
     value text
 );
 ```
-and `cdc.equality_op`s are a subset of [postgrest ops](https://postgrest.org/en/v4.1/api.html#horizontal-filtering-rows). Specifically:
+and `realtime.equality_op`s are a subset of [postgrest ops](https://postgrest.org/en/v4.1/api.html#horizontal-filtering-rows). Specifically:
 ```sql
-create type cdc.equality_op as enum(
+create type realtime.equality_op as enum(
     'eq', 'neq', 'lt', 'lte', 'gt', 'gte'
 );
 ```
 
 For example, to subscribe a user to table named `public.notes` where the `id` is `6`:
 ```sql
-insert into cdc.subscription(user_id, entity, filters)
+insert into realtime.subscription(user_id, entity, filters)
 values ('832bd278-dac7-4bef-96be-e21c8a0023c4', 'public.notes', array[('id', 'eq', '6')]);
 ```
 
 
 ### Reading WAL
 
-This package exposes 1 public SQL function `cdc.apply_rls(jsonb)`. It processes the output of a `wal2json` decoded logical replication slot and returns:
+This package exposes 1 public SQL function `realtime.apply_rls(jsonb)`. It processes the output of a `wal2json` decoded logical replication slot and returns:
 
 - `wal`: (jsonb) The WAL record as JSONB in the form
 - `is_rls_enabled`: (bool) If the entity (table) the WAL record represents has row level security enabled
@@ -151,30 +151,6 @@ deletes:
 }
 ```
 
-and truncates
-```json
-{
-    "type": "TRUNCATE",
-    "schema": "public",
-    "table": "todos",
-    "columns": [
-        {
-            "name": "id",
-            "type": "int8",
-        },
-        {
-            "name": "details",
-            "type": "text",
-        },
-        {
-            "name": "user_id",
-            "type": "int8",
-        }
-    ],
-    "commit_timestamp": "2021-09-29T17:35:38Z"
-}
-```
-
 Important Notes:
 
 - Row level security is not applied to delete statements
@@ -184,7 +160,7 @@ Important Notes:
 ## Error States
 
 ### Error 401: Unauthorized
-If a WAL record is passed through `cdc.apply_rls` and the `authenticated` role does not have permission to `select` any of the columns in that table, an `Unauthorized` error is returned with no WAL data.
+If a WAL record is passed through `realtime.apply_rls` and the `authenticated` role does not have permission to `select` any of the columns in that table, an `Unauthorized` error is returned with no WAL data.
 
 Ex:
 ```sql
@@ -193,7 +169,7 @@ Ex:
     null,                            -- is_rls_enabled
     [],                              -- users,
     array['Error 401: Unauthorized'] -- errors
-)::cdc.wal_rls;
+)::realtime.wal_rls;
 ```
 
 ### Error 413: Payload Too Large
@@ -206,12 +182,12 @@ Ex:
     true,                                  -- is_rls_enabled
     [...],                                 -- users,
     array['Error 413: Payload Too Large']  -- errors
-)::cdc.wal_rls;
+)::realtime.wal_rls;
 ```
 
 ## How it Works
 
-Each WAL record is passed into `cdc.apply_rls(jsonb)` which:
+Each WAL record is passed into `realtime.apply_rls(jsonb)` which:
 
 - impersonates each subscribed user by setting `request.jwt.claims` to an object with `sub` (user's id), `email` (user's email), and `role` ('authenticated')
 - queries for the row using its primary key values
@@ -245,8 +221,8 @@ from
         'include-timestamp', 'true',
         'write-in-chunks', 'true',
         'format-version', '2',
-        'actions', 'insert,update,delete,truncate',
-        'filter-tables', 'cdc.*'
+        'actions', 'insert,update,delete',
+        'filter-tables', 'realtime.*'
     ),
     lateral (
         select
@@ -255,7 +231,7 @@ from
             x.users,
             x.errors
         from
-            cdc.apply_rls(data::jsonb) x(wal, is_rls_enabled, users, errors)
+            realtime.apply_rls(data::jsonb) x(wal, is_rls_enabled, users, errors)
     ) xyz
 ```
 
@@ -270,10 +246,9 @@ with pub as (
             ',',
             case when bool_or(pubinsert) then 'insert' else null end,
             case when bool_or(pubupdate) then 'update' else null end,
-            case when bool_or(pubdelete) then 'delete' else null end,
-            case when bool_or(pubtruncate) then 'truncate' else null end
+            case when bool_or(pubdelete) then 'delete' else null end
         ) as w2j_actions,
-        string_agg(cdc.quote_wal2json(format('%I.%I', schemaname, tablename)::regclass), ',') w2j_add_tables
+        string_agg(realtime.quote_wal2json(format('%I.%I', schemaname, tablename)::regclass), ',') w2j_add_tables
     from
         pg_publication pp
         join pg_publication_tables ppt
@@ -313,7 +288,7 @@ from
             x.users,
             x.errors
         from
-            cdc.apply_rls(
+            realtime.apply_rls(
                 wal := w2j.data::jsonb,
                 max_record_bytes := 1048576
             ) x(wal, is_rls_enabled, users, errors)
@@ -330,7 +305,7 @@ where
 
 Ex:
 ```sql
-cdc.apply_rls(wal := w2j.data::jsonb, max_record_bytes := 1024*1024) x(wal, is_rls_enabled, users, errors)
+realtime.apply_rls(wal := w2j.data::jsonb, max_record_bytes := 1024*1024) x(wal, is_rls_enabled, users, errors)
 ```
 
 

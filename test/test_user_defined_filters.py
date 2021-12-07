@@ -46,7 +46,7 @@ def test_user_defined_eq_filter(op, type_, val_1, val_2, result, sess):
     (x,) = sess.execute(
         select(
             [
-                func.cdc.check_equality_op(
+                func.realtime.check_equality_op(
                     op,
                     type_,
                     val_1,

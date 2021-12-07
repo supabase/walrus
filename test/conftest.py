@@ -80,7 +80,7 @@ for table
     public.note,
     public.unauthorized
 with (
-    publish = 'insert,update,delete,truncate'
+    publish = 'insert,update,delete'
 );
             """
         )
@@ -121,7 +121,7 @@ select * from pg_create_logical_replication_slot('realtime', 'wal2json', false);
     alter default privileges in schema public grant all on tables to authenticated;
     alter default privileges in schema public grant all on functions to authenticated;
     alter default privileges in schema public grant all on sequences to authenticated;
-    truncate table cdc.subscription cascade;
+    truncate table realtime.subscription cascade;
     """
     )
     conn.execute(text("commit"))

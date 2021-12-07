@@ -49,11 +49,6 @@ class DeleteWAL(BaseWAL):
     old_record: ColValDict
 
 
-class TruncateWAL(BaseWAL):
-    type: Literal["TRUNCATE"]
-    columns: Columns
-
-
 class InsertWAL(BaseWAL):
     type: Literal["INSERT"]
     columns: Columns
@@ -75,10 +70,9 @@ with pub as (
             ',',
             case when bool_or(pubinsert) then 'insert' else null end,
             case when bool_or(pubupdate) then 'update' else null end,
-            case when bool_or(pubdelete) then 'delete' else null end,
-            case when bool_or(pubtruncate) then 'truncate' else null end
+            case when bool_or(pubdelete) then 'delete' else null end
         ) as w2j_actions,
-        string_agg(cdc.quote_wal2json(format('%I.%I', schemaname, tablename)::regclass), ',') w2j_add_tables
+        string_agg(realtime.quote_wal2json(format('%I.%I', schemaname, tablename)::regclass), ',') w2j_add_tables
     from
         pg_publication pp
         join pg_publication_tables ppt
@@ -119,7 +113,7 @@ from
             x.users,
             x.errors
         from
-            cdc.apply_rls(
+            realtime.apply_rls(
                 wal := w2j.data::jsonb,
                 max_record_bytes := 1048576
             ) x(wal, is_rls_enabled, users, errors)
@@ -170,7 +164,7 @@ def insert_subscriptions(sess, filters: Dict[str, Any] = {}, n=1):
     sess.execute(
         text(
             """
-insert into cdc.subscription(user_id, entity)
+insert into realtime.subscription(user_id, entity)
 select extensions.uuid_generate_v4(), 'public.note' from generate_series(1,:n);
     """
         ),
@@ -184,7 +178,7 @@ def insert_notes(sess, body="take out the trash", n=1):
         text(
             """
 insert into public.note(user_id, body)
-select user_id, :body from cdc.subscription order by id limit :n;
+select user_id, :body from realtime.subscription order by id limit :n;
     """
         ),
         {"n": n, "body": body},
@@ -239,7 +233,7 @@ revoke select on public.unauthorized from authenticated;
     sess.execute(
         text(
             """
-insert into cdc.subscription(user_id, entity)
+insert into realtime.subscription(user_id, entity)
 select extensions.uuid_generate_v4(), 'public.unauthorized';
     """
         )
@@ -335,21 +329,6 @@ def test_wal_update_changed_identity(sess):
     assert wal["old_record"]["id"] == 1
 
 
-def test_wal_truncate(sess):
-    setup_note(sess)
-    setup_note_rls(sess)
-    insert_subscriptions(sess, n=2)
-    insert_notes(sess, n=1)
-    clear_wal(sess)
-    sess.execute("truncate table public.note;")
-    sess.commit()
-    _, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
-    TruncateWAL.parse_obj(wal)
-    assert errors == []
-    assert is_rls_enabled
-    assert len(users) == 2
-
-
 def test_wal_delete(sess):
     setup_note(sess)
     setup_note_rls(sess)
@@ -411,11 +390,11 @@ def test_user_defined_eq_filter(filter_str, is_true, sess):
     # Test does not match
     sess.execute(
         f"""
-insert into cdc.subscription(user_id, entity, filters)
+insert into realtime.subscription(user_id, entity, filters)
 select
     extensions.uuid_generate_v4(),
     'public.note',
-    array[{filter_str}]::cdc.user_defined_filter[];
+    array[{filter_str}]::realtime.user_defined_filter[];
     """
     )
     sess.commit()
@@ -464,14 +443,14 @@ def test_performance_on_n_recs_n_subscribed(sess, rls_on: bool):
                     """
             explain analyze
             select
-                cdc.apply_rls(data::jsonb)
+                realtime.apply_rls(data::jsonb)
             from
                 pg_logical_slot_peek_changes(
                     'realtime', null, null,
                     'include-pk', '1',
                     'include-transaction', 'false',
                     'format-version', '2',
-                    'filter-tables', 'cdc.*'
+                    'filter-tables', 'realtime.*'
                 )
             """
                 )
@@ -526,7 +505,7 @@ def test_performance_on_n_recs_n_subscribed(sess, rls_on: bool):
         sess.execute(
             text(
                 """
-            truncate table cdc.subscription;
+            truncate table realtime.subscription;
             """
             )
         )
