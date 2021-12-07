@@ -151,30 +151,6 @@ deletes:
 }
 ```
 
-and truncates
-```json
-{
-    "type": "TRUNCATE",
-    "schema": "public",
-    "table": "todos",
-    "columns": [
-        {
-            "name": "id",
-            "type": "int8",
-        },
-        {
-            "name": "details",
-            "type": "text",
-        },
-        {
-            "name": "user_id",
-            "type": "int8",
-        }
-    ],
-    "commit_timestamp": "2021-09-29T17:35:38Z"
-}
-```
-
 Important Notes:
 
 - Row level security is not applied to delete statements
@@ -245,7 +221,7 @@ from
         'include-timestamp', 'true',
         'write-in-chunks', 'true',
         'format-version', '2',
-        'actions', 'insert,update,delete,truncate',
+        'actions', 'insert,update,delete',
         'filter-tables', 'realtime.*'
     ),
     lateral (
@@ -270,8 +246,7 @@ with pub as (
             ',',
             case when bool_or(pubinsert) then 'insert' else null end,
             case when bool_or(pubupdate) then 'update' else null end,
-            case when bool_or(pubdelete) then 'delete' else null end,
-            case when bool_or(pubtruncate) then 'truncate' else null end
+            case when bool_or(pubdelete) then 'delete' else null end
         ) as w2j_actions,
         string_agg(realtime.quote_wal2json(format('%I.%I', schemaname, tablename)::regclass), ',') w2j_add_tables
     from

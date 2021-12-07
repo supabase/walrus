@@ -75,8 +75,7 @@ with pub as (
             ',',
             case when bool_or(pubinsert) then 'insert' else null end,
             case when bool_or(pubupdate) then 'update' else null end,
-            case when bool_or(pubdelete) then 'delete' else null end,
-            case when bool_or(pubtruncate) then 'truncate' else null end
+            case when bool_or(pubdelete) then 'delete' else null end
         ) as w2j_actions,
         string_agg(realtime.quote_wal2json(format('%I.%I', schemaname, tablename)::regclass), ',') w2j_add_tables
     from
@@ -333,21 +332,6 @@ def test_wal_update_changed_identity(sess):
     assert wal["record"]["id"] == 99
     assert wal["record"]["body"] == "some body"
     assert wal["old_record"]["id"] == 1
-
-
-def test_wal_truncate(sess):
-    setup_note(sess)
-    setup_note_rls(sess)
-    insert_subscriptions(sess, n=2)
-    insert_notes(sess, n=1)
-    clear_wal(sess)
-    sess.execute("truncate table public.note;")
-    sess.commit()
-    _, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
-    TruncateWAL.parse_obj(wal)
-    assert errors == []
-    assert is_rls_enabled
-    assert len(users) == 2
 
 
 def test_wal_delete(sess):
