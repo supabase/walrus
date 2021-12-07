@@ -165,15 +165,23 @@ alter table public.note enable row level security;
     sess.commit()
 
 
-def insert_subscriptions(sess, filters: Dict[str, Any] = {}, n=1):
+def insert_subscriptions(sess, role: str = "authenticated", n=1):
     sess.execute(
         text(
             """
-insert into realtime.subscription(user_id, entity)
-select extensions.uuid_generate_v4(), 'public.note' from generate_series(1,:n);
+insert into realtime.subscription(id, entity, claims)
+select
+    extensions.uuid_generate_v4(),
+    'public.note',
+    jsonb_build_object(
+        'role', :role,
+        'email', 'example@example.com',
+        'sub', extensions.uuid_generate_v4()::text
+    )
+    from generate_series(1,:n);
     """
         ),
-        {"n": n},
+        {"n": n, "role": role},
     )
     sess.commit()
 
@@ -183,7 +191,7 @@ def insert_notes(sess, body="take out the trash", n=1):
         text(
             """
 insert into public.note(user_id, body)
-select user_id, :body from realtime.subscription order by id limit :n;
+select (claims ->> 'sub')::uuid, :body from realtime.subscription order by id limit :n;
     """
         ),
         {"n": n, "body": body},
@@ -238,8 +246,8 @@ revoke select on public.unauthorized from authenticated;
     sess.execute(
         text(
             """
-insert into realtime.subscription(user_id, entity)
-select extensions.uuid_generate_v4(), 'public.unauthorized';
+insert into realtime.subscription(id, entity, claims)
+select extensions.uuid_generate_v4(), 'public.unauthorized', jsonb_build_object('role', 'authenticated');
     """
         )
     )
@@ -254,8 +262,9 @@ values (1)
         )
     )
     sess.commit()
-    _, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
-    assert (wal, is_rls_enabled, users) == (None, None, [])
+    _, wal, is_rls_enabled, subscription_ids, errors = sess.execute(QUERY).one()
+    assert (wal, is_rls_enabled) == (None, None)
+    assert len(subscription_ids) == 1
     assert len(errors) == 1
     assert errors[0] == "Error 401: Unauthorized"
 
@@ -395,11 +404,12 @@ def test_user_defined_eq_filter(filter_str, is_true, sess):
     # Test does not match
     sess.execute(
         f"""
-insert into realtime.subscription(user_id, entity, filters)
+insert into realtime.subscription(id, entity, filters, claims)
 select
     extensions.uuid_generate_v4(),
     'public.note',
-    array[{filter_str}]::realtime.user_defined_filter[];
+    array[{filter_str}]::realtime.user_defined_filter[],
+    jsonb_build_object('role', 'authenticated');
     """
     )
     sess.commit()
@@ -408,109 +418,3 @@ select
     insert_notes(sess, n=1, body="bbb")
     raw, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
     assert len(users) == (1 if is_true else 0)
-
-
-@pytest.mark.performance
-@pytest.mark.parametrize("rls_on", [False, True])
-def test_performance_on_n_recs_n_subscribed(sess, rls_on: bool):
-    setup_note(sess)
-    if rls_on:
-        setup_note_rls(sess)
-    clear_wal(sess)
-
-    if not rls_on:
-        with open("perf.tsv", "w") as f:
-            f.write("n_notes\tn_subscriptions\texec_time\trls_on\n")
-
-    for n_subscriptions in [
-        1,
-        2,
-        3,
-        5,
-        10,
-        25,
-        50,
-        100,
-        250,
-        500,
-        1000,
-        2000,
-        5000,
-        10000,
-    ]:
-        insert_subscriptions(sess, n=n_subscriptions)
-        for n_notes in [1, 2, 3, 4, 5]:
-            clear_wal(sess)
-            insert_notes(sess, n=n_notes)
-
-            data = sess.execute(
-                text(
-                    """
-            explain analyze
-            select
-                realtime.apply_rls(data::jsonb)
-            from
-                pg_logical_slot_peek_changes(
-                    'realtime', null, null,
-                    'include-pk', '1',
-                    'include-transaction', 'false',
-                    'format-version', '2',
-                    'filter-tables', 'realtime.*'
-                )
-            """
-                )
-            ).scalar()
-
-            exec_time = float(
-                data[data.find("time=") :].split(" ")[0].split("=")[1].split("..")[1]
-            )
-
-            with open("perf.tsv", "a") as f:
-                f.write(f"{n_notes}\t{n_subscriptions}\t{exec_time}\t{rls_on}\n")
-
-            # Confirm that the data is correct
-            data = sess.execute(QUERY).all()
-            assert len(data) == n_notes
-
-            # Accumulate the visible_to person for each change and confirm it matches
-            # the number of notes
-            all_visible_to = []
-            for (raw, wal, is_rls_enabled, users, errors) in data:
-                for visible_to in users:
-                    all_visible_to.append(visible_to)
-
-            if rls_on:
-                try:
-                    assert (
-                        len(all_visible_to)
-                        == len(set(all_visible_to))
-                        == min(n_notes, n_subscriptions)
-                    )
-                except:
-                    print(
-                        "n_notes",
-                        n_notes,
-                        "n_subscriptions",
-                        n_subscriptions,
-                        all_visible_to,
-                    )
-                    raise
-            else:
-                assert n_subscriptions == len(set(all_visible_to))
-
-            sess.execute(
-                text(
-                    """
-            truncate table public.note;
-            """
-                )
-            )
-            clear_wal(sess)
-
-        sess.execute(
-            text(
-                """
-            truncate table realtime.subscription;
-            """
-            )
-        )
