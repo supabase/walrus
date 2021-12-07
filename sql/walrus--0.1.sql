@@ -13,7 +13,7 @@ create type realtime.equality_op as enum(
 );
 
 
-create type realtime.action as enum ('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'ERROR');
+create type realtime.action as enum ('INSERT', 'UPDATE', 'DELETE', 'ERROR');
 
 
 create function realtime.cast(val text, type_ regtype)
@@ -282,7 +282,6 @@ declare
             when 'I' then 'INSERT'
             when 'U' then 'UPDATE'
             when 'D' then 'DELETE'
-            when 'T' then 'TRUNCATE'
             else 'ERROR'
         end
     );
@@ -407,7 +406,7 @@ begin
         else '{}'::jsonb
     end;
 
-    if action in ('TRUNCATE', 'DELETE') then
+    if action = 'DELETE' then
         visible_to_user_ids = array_agg(s.user_id) from unnest(subscriptions) s;
     else
         -- If RLS is on and someone is subscribed to the table prep
