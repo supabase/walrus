@@ -3,20 +3,20 @@
         Write Ahead Log Realtime Unified Security
 */
 
-create schema cdc;
-grant usage on schema cdc to postgres;
-grant usage on schema cdc to authenticated;
+create schema realtime;
+grant usage on schema realtime to postgres;
+grant usage on schema realtime to authenticated;
 
 
-create type cdc.equality_op as enum(
+create type realtime.equality_op as enum(
     'eq', 'neq', 'lt', 'lte', 'gt', 'gte'
 );
 
 
-create type cdc.action as enum ('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'ERROR');
+create type realtime.action as enum ('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'ERROR');
 
 
-create function cdc.cast(val text, type_ regtype)
+create function realtime.cast(val text, type_ regtype)
     returns jsonb
     immutable
     language plpgsql
@@ -30,30 +30,30 @@ end
 $$;
 
 
-create type cdc.user_defined_filter as (
+create type realtime.user_defined_filter as (
     column_name text,
-    op cdc.equality_op,
+    op realtime.equality_op,
     value text
 );
 
 
-create table cdc.subscription (
+create table realtime.subscription (
     -- Tracks which users are subscribed to each table
     id bigint not null generated always as identity,
     user_id uuid not null,
     -- Populated automatically by trigger. Required to enable auth.email()
     email varchar(255),
     entity regclass not null,
-    filters cdc.user_defined_filter[] not null default '{}',
+    filters realtime.user_defined_filter[] not null default '{}',
     created_at timestamp not null default timezone('utc', now()),
 
     constraint pk_subscription primary key (id),
     unique (entity, user_id, filters)
 );
-create index ix_cdc_subscription_entity on cdc.subscription using hash (entity);
+create index ix_realtime_subscription_entity on realtime.subscription using hash (entity);
 
 
-create function cdc.subscription_check_filters()
+create function realtime.subscription_check_filters()
     returns trigger
     language plpgsql
 as $$
@@ -72,7 +72,7 @@ declare
         where
             (quote_ident(c.table_schema) || '.' || quote_ident(c.table_name))::regclass = new.entity
             and pg_catalog.has_column_privilege('authenticated', new.entity, c.column_name, 'SELECT');
-    filter cdc.user_defined_filter;
+    filter realtime.user_defined_filter;
     col_type regtype;
 begin
     for filter in select * from unnest(new.filters) loop
@@ -92,7 +92,7 @@ begin
             raise exception 'failed to lookup type for column %', filter.column_name;
         end if;
         -- raises an exception if value is not coercable to type
-        perform cdc.cast(filter.value, col_type);
+        perform realtime.cast(filter.value, col_type);
     end loop;
 
     -- Apply consistent order to filters so the unique constraint on
@@ -107,16 +107,16 @@ end;
 $$;
 
 create trigger tr_check_filters
-    before insert or update on cdc.subscription
+    before insert or update on realtime.subscription
     for each row
-    execute function cdc.subscription_check_filters();
+    execute function realtime.subscription_check_filters();
 
 
-grant all on cdc.subscription to postgres;
-grant select on cdc.subscription to authenticated;
+grant all on realtime.subscription to postgres;
+grant select on realtime.subscription to authenticated;
 
 
-create or replace function cdc.quote_wal2json(entity regclass)
+create or replace function realtime.quote_wal2json(entity regclass)
     returns text
     language sql
     immutable
@@ -153,8 +153,8 @@ as $$
 $$;
 
 
-create or replace function cdc.check_equality_op(
-    op cdc.equality_op,
+create or replace function realtime.check_equality_op(
+    op realtime.equality_op,
     type_ regtype,
     val_1 text,
     val_2 text
@@ -186,7 +186,7 @@ end;
 $$;
 
 
-create type cdc.wal_column as (
+create type realtime.wal_column as (
     name text,
     type text,
     value jsonb,
@@ -194,10 +194,10 @@ create type cdc.wal_column as (
     is_selectable boolean
 );
 
-create or replace function cdc.build_prepared_statement_sql(
+create or replace function realtime.build_prepared_statement_sql(
     prepared_statement_name text,
     entity regclass,
-    columns cdc.wal_column[]
+    columns realtime.wal_column[]
 )
     returns text
     language sql
@@ -207,7 +207,7 @@ Builds a sql string that, if executed, creates a prepared statement to
 tests retrive a row from *entity* by its primary key columns.
 
 Example
-    select cdc.build_prepared_statment_sql('public.notes', '{"id"}'::text[], '{"bigint"}'::text[])
+    select realtime.build_prepared_statment_sql('public.notes', '{"id"}'::text[], '{"bigint"}'::text[])
 */
     select
 'prepare ' || prepared_statement_name || ' as
@@ -229,7 +229,7 @@ Example
 $$;
 
 
-create type cdc.wal_rls as (
+create type realtime.wal_rls as (
     wal jsonb,
     is_rls_enabled boolean,
     users uuid[],
@@ -238,7 +238,7 @@ create type cdc.wal_rls as (
 
 
 
-create or replace function cdc.is_visible_through_filters(columns cdc.wal_column[], filters cdc.user_defined_filter[])
+create or replace function realtime.is_visible_through_filters(columns realtime.wal_column[], filters realtime.user_defined_filter[])
     returns bool
     language sql
     immutable
@@ -250,7 +250,7 @@ Should the record be visible (true) or filtered out (false) after *filters* are 
         -- Default to allowed when no filters present
         coalesce(
             sum(
-                cdc.check_equality_op(
+                realtime.check_equality_op(
                     op:=f.op,
                     type_:=col.type::regtype,
                     -- cast jsonb to text
@@ -267,8 +267,8 @@ Should the record be visible (true) or filtered out (false) after *filters* are 
 $$;
 
 
-create or replace function cdc.apply_rls(wal jsonb, max_record_bytes int = 1024 * 1024)
-    returns cdc.wal_rls
+create or replace function realtime.apply_rls(wal jsonb, max_record_bytes int = 1024 * 1024)
+    returns realtime.wal_rls
     language plpgsql
     volatile
 as $$
@@ -277,7 +277,7 @@ declare
     entity_ regclass = (quote_ident(wal ->> 'schema') || '.' || quote_ident(wal ->> 'table'))::regclass;
 
     -- I, U, D, T: insert, update ...
-    action cdc.action = (
+    action realtime.action = (
         case wal ->> 'action'
             when 'I' then 'INSERT'
             when 'U' then 'UPDATE'
@@ -298,23 +298,23 @@ declare
     visible_to_user_ids uuid[] = '{}';
 
     -- user subscriptions to the wal record's table
-    subscriptions cdc.subscription[] =
+    subscriptions realtime.subscription[] =
             array_agg(sub)
         from
-            cdc.subscription sub
+            realtime.subscription sub
         where
             sub.entity = entity_;
 
     -- structured info for wal's columns
-    columns cdc.wal_column[] =
+    columns realtime.wal_column[] =
         array_agg(
             (
                 x->>'name',
                 x->>'type',
-                cdc.cast((x->'value') #>> '{}', (x->>'type')::regtype),
+                realtime.cast((x->'value') #>> '{}', (x->>'type')::regtype),
                 (pks ->> 'name') is not null,
                 pg_catalog.has_column_privilege('authenticated', entity_, x->>'name', 'SELECT')
-            )::cdc.wal_column
+            )::realtime.wal_column
         )
         from
             jsonb_array_elements(wal -> 'columns') x
@@ -322,15 +322,15 @@ declare
                 on (x ->> 'name') = (pks ->> 'name');
 
     -- previous identity values for update/delete
-    old_columns cdc.wal_column[] =
+    old_columns realtime.wal_column[] =
         array_agg(
             (
                 x->>'name',
                 x->>'type',
-                cdc.cast((x->'value') #>> '{}', (x->>'type')::regtype),
+                realtime.cast((x->'value') #>> '{}', (x->>'type')::regtype),
                 (pks ->> 'name') is not null,
                 pg_catalog.has_column_privilege('authenticated', entity_, x->>'name', 'SELECT')
-            )::cdc.wal_column
+            )::realtime.wal_column
         )
         from
             jsonb_array_elements(wal -> 'identity') x
@@ -356,7 +356,7 @@ begin
             null,
             visible_to_user_ids,
             array['Error 401: Unauthorized']
-        )::cdc.wal_rls;
+        )::realtime.wal_rls;
     end if;
 
     -------------------------------
@@ -416,7 +416,7 @@ begin
             if (select 1 from pg_prepared_statements where name = 'walrus_rls_stmt' limit 1) > 0 then
                 deallocate walrus_rls_stmt;
             end if;
-            execute cdc.build_prepared_statement_sql('walrus_rls_stmt', entity_, columns);
+            execute realtime.build_prepared_statement_sql('walrus_rls_stmt', entity_, columns);
 
         end if;
 
@@ -425,7 +425,7 @@ begin
                 select
                     subs.user_id,
                     subs.email,
-                    cdc.is_visible_through_filters(columns, subs.filters)
+                    realtime.is_visible_through_filters(columns, subs.filters)
                 from
                     unnest(subscriptions) subs
         )
@@ -467,6 +467,6 @@ begin
         is_rls_enabled,
         visible_to_user_ids,
         errors
-    )::cdc.wal_rls;
+    )::realtime.wal_rls;
 end;
 $$;
