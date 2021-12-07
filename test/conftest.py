@@ -80,7 +80,7 @@ for table
     public.note,
     public.unauthorized
 with (
-    publish = 'insert,update,delete,truncate'
+    publish = 'insert,update,delete'
 );
             """
         )

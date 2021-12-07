@@ -12,7 +12,7 @@ create type realtime.equality_op as enum(
 );
 
 
-create type realtime.action as enum ('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'ERROR');
+create type realtime.action as enum ('INSERT', 'UPDATE', 'DELETE', 'ERROR');
 
 
 create function realtime.cast(val text, type_ regtype)
@@ -284,7 +284,6 @@ declare
             when 'I' then 'INSERT'
             when 'U' then 'UPDATE'
             when 'D' then 'DELETE'
-            when 'T' then 'TRUNCATE'
             else 'ERROR'
         end
     );

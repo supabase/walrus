@@ -49,11 +49,6 @@ class DeleteWAL(BaseWAL):
     old_record: ColValDict
 
 
-class TruncateWAL(BaseWAL):
-    type: Literal["TRUNCATE"]
-    columns: Columns
-
-
 class InsertWAL(BaseWAL):
     type: Literal["INSERT"]
     columns: Columns
