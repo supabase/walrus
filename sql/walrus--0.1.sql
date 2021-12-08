@@ -317,10 +317,7 @@ declare
     -- previous identity values for update/delete
     old_columns realtime.wal_column[];
 
-    -- Error states
     error_record_exceeds_max_size boolean = octet_length(wal::text) > max_record_bytes;
-    error_primary_key_not_selectable boolean; -- todo
-    errors text[];
 
     -- Primary jsonb output for record
     output jsonb;
@@ -330,14 +327,67 @@ declare
 begin
     perform set_config('role', null, true);
 
+    columns =
+        array_agg(
+            (
+                x->>'name',
+                x->>'type',
+                realtime.cast((x->'value') #>> '{}', (x->>'type')::regtype),
+                (pks ->> 'name') is not null,
+                true
+            )::realtime.wal_column
+        )
+        from
+            jsonb_array_elements(wal -> 'columns') x
+            left join jsonb_array_elements(wal -> 'pk') pks
+                on (x ->> 'name') = (pks ->> 'name');
+
+    old_columns =
+        array_agg(
+            (
+                x->>'name',
+                x->>'type',
+                realtime.cast((x->'value') #>> '{}', (x->>'type')::regtype),
+                (pks ->> 'name') is not null,
+                true
+            )::realtime.wal_column
+        )
+        from
+            jsonb_array_elements(wal -> 'identity') x
+            left join jsonb_array_elements(wal -> 'pk') pks
+                on (x ->> 'name') = (pks ->> 'name');
+
     for working_role in select * from unnest(roles) loop
 
-        errors = '{}';
-        visible_to_subscription_ids = '{}';
+        -- Update `is_selectable` for columns and old_columns
+        columns =
+            array_agg(
+                (
+                    c.name,
+                    c.type,
+                    c.value,
+                    c.is_pkey,
+                    pg_catalog.has_column_privilege(working_role, entity_, c.name, 'SELECT')
+                )::realtime.wal_column
+            )
+            from
+                unnest(columns) c;
 
+        old_columns =
+                array_agg(
+                    (
+                        c.name,
+                        c.type,
+                        c.value,
+                        c.is_pkey,
+                        pg_catalog.has_column_privilege(working_role, entity_, c.name, 'SELECT')
+                    )::realtime.wal_column
+                )
+                from
+                    unnest(old_columns) c;
 
-        -- The claims user does not have SELECT permission on any of the columns for the entity_
-        if not pg_catalog.has_any_column_privilege(working_role, entity_, 'SELECT') then
+        -- The claims role does not have SELECT permission to the primary key of entity
+        if sum(c.is_selectable::int) <> sum(c.is_pkey::int) from unnest(columns) c where c.is_pkey then
             result_arr = result_arr || (
                 null,
                 null,
@@ -345,36 +395,6 @@ begin
                 array['Error 401: Unauthorized']
             )::realtime.wal_rls;
         else
-            columns =
-                array_agg(
-                    (
-                        x->>'name',
-                        x->>'type',
-                        realtime.cast((x->'value') #>> '{}', (x->>'type')::regtype),
-                        (pks ->> 'name') is not null,
-                        pg_catalog.has_column_privilege(working_role, entity_, x->>'name', 'SELECT')
-                    )::realtime.wal_column
-                )
-                from
-                    jsonb_array_elements(wal -> 'columns') x
-                    left join jsonb_array_elements(wal -> 'pk') pks
-                        on (x ->> 'name') = (pks ->> 'name');
-
-            old_columns =
-                array_agg(
-                    (
-                        x->>'name',
-                        x->>'type',
-                        realtime.cast((x->'value') #>> '{}', (x->>'type')::regtype),
-                        (pks ->> 'name') is not null,
-                        pg_catalog.has_column_privilege(working_role, entity_, x->>'name', 'SELECT')
-                    )::realtime.wal_column
-                )
-                from
-                    jsonb_array_elements(wal -> 'identity') x
-                    left join jsonb_array_elements(wal -> 'pk') pks
-                        on (x ->> 'name') = (pks ->> 'name');
-
             output = jsonb_build_object(
                 'schema', wal ->> 'schema',
                 'table', wal ->> 'table',
@@ -444,7 +464,7 @@ begin
                         and realtime.is_visible_through_filters(columns, subs.filters)
             ) loop
 
-                if action = 'DELETE' or not is_rls_enabled then
+                if not is_rls_enabled or action = 'DELETE' then
                     visible_to_subscription_ids = visible_to_subscription_ids || subscription_id;
                 else
                     -- Check if RLS allows the user to see the record
@@ -460,27 +480,22 @@ begin
                 end if;
             end loop;
 
-
-            if error_record_exceeds_max_size then
-                errors = array['Error 413: Payload Too Large'];
-                output = output || jsonb_build_object(
-                    'record', '{}'::jsonb,
-                    'old_record', '{}'::jsonb
-                );
-            end if;
-
             perform set_config('role', null, true);
 
             result_arr = result_arr || (
                 output,
                 is_rls_enabled,
                 visible_to_subscription_ids,
-                errors
+                case
+                    when error_record_exceeds_max_size then array['Error 413: Payload Too Large']
+                    else '{}'
+                end
             )::realtime.wal_rls;
 
         end if;
     end loop;
 
+    perform set_config('role', null, true);
 
     return next unnest(result_arr);
 end;
