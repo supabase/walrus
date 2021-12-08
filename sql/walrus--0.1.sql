@@ -386,14 +386,23 @@ begin
                 from
                     unnest(old_columns) c;
 
+        if action <> 'DELETE' and count(1) = 0 from unnest(columns) c where c.is_pkey then
+            result_arr = result_arr || (
+                null,
+                null,
+                (select array_agg(id) from realtime.subscription where entity = entity_ and claims_role = working_role),
+                array['Error 400: Bad Request, no primary key']
+            )::realtime.wal_rls;
+
         -- The claims role does not have SELECT permission to the primary key of entity
-        if sum(c.is_selectable::int) <> sum(c.is_pkey::int) from unnest(columns) c where c.is_pkey then
+        elsif action <> 'DELETE' and sum(c.is_selectable::int) <> count(1) from unnest(columns) c where c.is_pkey then
             result_arr = result_arr || (
                 null,
                 null,
                 (select array_agg(id) from realtime.subscription where entity = entity_ and claims_role = working_role),
                 array['Error 401: Unauthorized']
             )::realtime.wal_rls;
+
         else
             output = jsonb_build_object(
                 'schema', wal ->> 'schema',

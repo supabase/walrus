@@ -159,8 +159,21 @@ Important Notes:
 
 ## Error States
 
+### Error 400: Bad Request, no primary key
+If a WAL record for a table that does not have a primary key is passed through `realtime.apply_rls`, an error is returned
+
+Ex:
+```sql
+(
+    null,                            -- wal
+    null,                            -- is_rls_enabled
+    [],                              -- users,
+    array['Error 400: Bad Request, no primary key'] -- errors
+)::realtime.wal_rls;
+```
+
 ### Error 401: Unauthorized
-If a WAL record is passed through `realtime.apply_rls` and the `authenticated` role does not have permission to `select` any of the columns in that table, an `Unauthorized` error is returned with no WAL data.
+If a WAL record is passed through `realtime.apply_rls` and the `authenticated` role does not have permission to `select` the primary key columns in that table, an `Unauthorized` error is returned with no WAL data.
 
 Ex:
 ```sql
