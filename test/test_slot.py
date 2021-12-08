@@ -87,7 +87,7 @@ select
     w2j.data::jsonb raw,
     xyz.wal,
     xyz.is_rls_enabled,
-    xyz.users,
+    xyz.subscription_ids,
     xyz.errors
 from
     pub,
@@ -110,13 +110,13 @@ from
         select
             x.wal,
             x.is_rls_enabled,
-            x.users,
+            x.subscription_ids,
             x.errors
         from
             realtime.apply_rls(
                 wal := w2j.data::jsonb,
                 max_record_bytes := 1048576
-            ) x(wal, is_rls_enabled, users, errors)
+            ) x(wal, is_rls_enabled, subscription_ids, errors)
     ) xyz
 where
     coalesce(pub.w2j_add_tables, '') <> ''
@@ -220,12 +220,12 @@ def test_read_wal_w_visible_to_no_rls(sess):
     insert_subscriptions(sess)
     clear_wal(sess)
     insert_notes(sess)
-    _, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
+    _, wal, is_rls_enabled, subscription_ids, errors = sess.execute(QUERY).one()
     InsertWAL.parse_obj(wal)
     assert errors == []
     assert not is_rls_enabled
     # visible_to includes subscribed user when no rls enabled
-    assert len(users) == 1
+    assert len(subscription_ids) == 1
 
     assert [x for x in wal["columns"] if x["name"] == "id"][0]["type"] == "int8"
 
@@ -271,7 +271,7 @@ def test_read_wal_w_visible_to_has_rls(sess):
     clear_wal(sess)
     insert_notes(sess, n=1)
     sess.commit()
-    _, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
+    _, wal, is_rls_enabled, subscription_ids, errors = sess.execute(QUERY).one()
     InsertWAL.parse_obj(wal)
     assert errors == []
     assert wal["record"]["id"] == 1
@@ -281,10 +281,10 @@ def test_read_wal_w_visible_to_has_rls(sess):
     assert [x for x in wal["columns"] if x["name"] == "arr_int"][0]["type"] == "_int4"
 
     assert is_rls_enabled
-    # 2 permitted users
-    assert len(users) == 1
+    # 2 permitted
+    assert len(subscription_ids) == 1
     # check user_id
-    assert isinstance(users[0], UUID)
+    assert isinstance(subscription_ids[0], UUID)
     # check the "dummy" column is not present in the columns due to
     # role secutiry on "authenticated" role
     columns_in_output = [x["name"] for x in wal["columns"]]
@@ -301,7 +301,7 @@ def test_wal_update(sess):
     clear_wal(sess)
     sess.execute("update public.note set body = 'new body'")
     sess.commit()
-    raw, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
+    raw, wal, is_rls_enabled, subscription_ids, errors = sess.execute(QUERY).one()
     UpdateWAL.parse_obj(wal)
     assert wal["record"]["id"] == 1
     assert wal["record"]["body"] == "new body"
@@ -311,8 +311,8 @@ def test_wal_update(sess):
     assert "old_body" not in wal["old_record"]
 
     assert is_rls_enabled
-    # 2 permitted users
-    assert len(users) == 1
+    # 2 permitted
+    assert len(subscription_ids) == 1
     # check the "dummy" column is not present in the columns due to
     # role secutiry on "authenticated" role
     columns_in_output = [x["name"] for x in wal["columns"]]
@@ -346,12 +346,12 @@ def test_wal_delete(sess):
     clear_wal(sess)
     sess.execute("delete from public.note;")
     sess.commit()
-    _, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
+    _, wal, is_rls_enabled, subscription_ids, errors = sess.execute(QUERY).one()
     DeleteWAL.parse_obj(wal)
     assert errors == []
     assert wal["old_record"]["id"] == 1
     assert is_rls_enabled
-    assert len(users) == 2
+    assert len(subscription_ids) == 2
 
 
 def test_error_413_payload_too_large(sess):
@@ -361,12 +361,12 @@ def test_error_413_payload_too_large(sess):
     clear_wal(sess)
     sess.execute("update public.note set body = repeat('a', 5 * 1024 * 1024);")
     sess.commit()
-    _, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
+    _, wal, is_rls_enabled, subscription_ids, errors = sess.execute(QUERY).one()
     UpdateWAL.parse_obj(wal)
     assert any(["413" in x for x in errors])
     assert wal["old_record"] == {}
     assert wal["record"] == {}
-    assert len(users) == 2
+    assert len(subscription_ids) == 2
 
 
 def test_no_pkey_returns_error(sess):
@@ -383,12 +383,12 @@ alter table public.note drop constraint note_pkey;
     clear_wal(sess)
     insert_notes(sess)
     sess.commit()
-    _, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
+    _, wal, is_rls_enabled, subscription_ids, errors = sess.execute(QUERY).one()
     assert len(errors) == 1
     assert errors[0] == "Error 400: Bad Request, no primary key"
     assert wal is None
     assert is_rls_enabled is None
-    assert len(users) == 1
+    assert len(subscription_ids) == 1
 
 
 @pytest.mark.parametrize(
@@ -436,5 +436,5 @@ select
     clear_wal(sess)
 
     insert_notes(sess, n=1, body="bbb")
-    raw, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
-    assert len(users) == (1 if is_true else 0)
+    raw, wal, is_rls_enabled, subscription_ids, errors = sess.execute(QUERY).one()
+    assert len(subscription_ids) == (1 if is_true else 0)

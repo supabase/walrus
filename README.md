@@ -24,12 +24,12 @@ User subscriptions are managed through a table
 
 ```sql
 create table realtime.subscription (
-    id bigint not null generated always as identity,
-    user_id uuid not null,
+    id uuid primary key,
     entity regclass not null,
-    filters realtime.user_defined_filter[],
-    created_at timestamp not null default timezone('utc', now()),
-    constraint pk_subscription primary key (id)
+    filters realtime.user_defined_filter[] not null default '{}',
+    claims jsonb not null,
+    claims_role regrole generated always as (realtime.to_regrole(claims ->> 'role')) stored,
+    created_at timestamp not null default timezone('utc', now())
 );
 ```
 where `realtime.user_defined_filter` is
@@ -47,10 +47,10 @@ create type realtime.equality_op as enum(
 );
 ```
 
-For example, to subscribe a user to table named `public.notes` where the `id` is `6`:
+For example, to subscribe to a table named `public.notes` where the `id` is `6` as the `authenticated` role:
 ```sql
-insert into realtime.subscription(user_id, entity, filters)
-values ('832bd278-dac7-4bef-96be-e21c8a0023c4', 'public.notes', array[('id', 'eq', '6')]);
+insert into realtime.subscription(id, entity, filters, claims)
+values ('832bd278-dac7-4bef-96be-e21c8a0023c4', 'public.notes', array[('id', 'eq', '6')], '{"role", "authenticated"}');
 ```
 
 
@@ -167,7 +167,7 @@ Ex:
 (
     null,                            -- wal
     null,                            -- is_rls_enabled
-    [],                              -- users,
+    [...],                              -- users,
     array['Error 400: Bad Request, no primary key'] -- errors
 )::realtime.wal_rls;
 ```
@@ -180,7 +180,7 @@ Ex:
 (
     null,                            -- wal
     null,                            -- is_rls_enabled
-    [],                              -- users,
+    [...],                              -- users,
     array['Error 401: Unauthorized'] -- errors
 )::realtime.wal_rls;
 ```
@@ -224,7 +224,7 @@ set search_path = '';
 select
     xyz.wal,
     xyz.is_rls_enabled,
-    xyz.users,
+    xyz.subscription_ids,
     xyz.errors
 from
     pg_logical_slot_get_changes(
@@ -241,10 +241,10 @@ from
         select
             x.wal,
             x.is_rls_enabled,
-            x.users,
+            x.subscription_ids,
             x.errors
         from
-            realtime.apply_rls(data::jsonb) x(wal, is_rls_enabled, users, errors)
+            realtime.apply_rls(data::jsonb) x(wal, is_rls_enabled, subcription_ids, errors)
     ) xyz
 ```
 
@@ -275,7 +275,7 @@ with pub as (
 select
     xyz.wal,
     xyz.is_rls_enabled,
-    xyz.users,
+    xyz.subscription_ids,
     xyz.errors
 from
     pub,
@@ -298,13 +298,13 @@ from
         select
             x.wal,
             x.is_rls_enabled,
-            x.users,
+            x.subscription_ids,
             x.errors
         from
             realtime.apply_rls(
                 wal := w2j.data::jsonb,
                 max_record_bytes := 1048576
-            ) x(wal, is_rls_enabled, users, errors)
+            ) x(wal, is_rls_enabled, subscription_ids, errors)
     ) xyz
 where
     coalesce(pub.w2j_add_tables, '') <> ''
@@ -318,7 +318,7 @@ where
 
 Ex:
 ```sql
-realtime.apply_rls(wal := w2j.data::jsonb, max_record_bytes := 1024*1024) x(wal, is_rls_enabled, users, errors)
+realtime.apply_rls(wal := w2j.data::jsonb, max_record_bytes := 1024*1024) x(wal, is_rls_enabled, subscription_ids, errors)
 ```
 
 

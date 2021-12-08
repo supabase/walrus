@@ -45,7 +45,7 @@ as $$ select role_name::regrole $$;
 
 
 create table realtime.subscription (
-    -- Tracks which users are subscribed to each table
+    -- Tracks which subscriptions are active
     id uuid primary key,
     entity regclass not null,
     filters realtime.user_defined_filter[] not null default '{}',
@@ -99,7 +99,7 @@ begin
     end loop;
 
     -- Apply consistent order to filters so the unique constraint on
-    -- (user_id, entity, filters) can't be tricked by a different filter order
+    -- (subscription_id, entity, filters) can't be tricked by a different filter order
     new.filters = coalesce(
         array_agg(f order by f.column_name, f.op, f.value),
         '{}'
@@ -234,7 +234,7 @@ $$;
 create type realtime.wal_rls as (
     wal jsonb,
     is_rls_enabled boolean,
-    users uuid[],
+    subscription_ids uuid[],
     errors text[]
 );
 
@@ -476,7 +476,7 @@ begin
                 if not is_rls_enabled or action = 'DELETE' then
                     visible_to_subscription_ids = visible_to_subscription_ids || subscription_id;
                 else
-                    -- Check if RLS allows the user to see the record
+                    -- Check if RLS allows the role to see the record
                     perform
                         set_config('role', working_role::text, true),
                         set_config('request.jwt.claims', claims::text, true);
