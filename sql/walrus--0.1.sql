@@ -449,8 +449,6 @@ begin
                 else '{}'::jsonb
             end;
 
-            -- TODO: error cases + primary key is selectable
-
             -- Create the prepared statement
             if is_rls_enabled and action <> 'DELETE' then
                 if (select 1 from pg_prepared_statements where name = 'walrus_rls_stmt' limit 1) > 0 then
