@@ -404,7 +404,10 @@ select
     extensions.uuid_generate_v4(),
     'public.note',
     array[{filter_str}]::realtime.user_defined_filter[],
-    jsonb_build_object('role', 'authenticated');
+    jsonb_build_object(
+        'role', 'authenticated',
+        'sub', extensions.uuid_generate_v4()::text
+    );
     """
     )
     sess.commit()

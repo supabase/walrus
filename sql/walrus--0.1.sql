@@ -74,7 +74,7 @@ declare
             information_schema.columns c
         where
             format('%I.%I', c.table_schema, c.table_name)::regclass = new.entity
-            and pg_catalog.has_column_privilege(new.claims_role, new.entity, c.column_name, 'SELECT');
+            and pg_catalog.has_column_privilege((new.claims ->> 'role'), new.entity, c.column_name, 'SELECT');
     filter realtime.user_defined_filter;
     col_type regtype;
 begin
@@ -423,7 +423,7 @@ begin
             -- TODO: error cases + primary key is selectable
 
             -- Create the prepared statement
-            if is_rls_enabled then
+            if is_rls_enabled and action <> 'DELETE' then
                 if (select 1 from pg_prepared_statements where name = 'walrus_rls_stmt' limit 1) > 0 then
                     deallocate walrus_rls_stmt;
                 end if;
@@ -459,6 +459,15 @@ begin
                     end if;
                 end if;
             end loop;
+
+
+            if error_record_exceeds_max_size then
+                errors = array['Error 413: Payload Too Large'];
+                output = output || jsonb_build_object(
+                    'record', '{}'::jsonb,
+                    'old_record', '{}'::jsonb
+                );
+            end if;
 
             perform set_config('role', null, true);
 
