@@ -315,8 +315,6 @@ declare
     -- Primary jsonb output for record
     output jsonb;
 
-    -- Final response
-    result_arr realtime.wal_rls[] = '{}';
 begin
     perform set_config('role', null, true);
 
@@ -380,7 +378,7 @@ begin
                     unnest(old_columns) c;
 
         if action <> 'DELETE' and count(1) = 0 from unnest(columns) c where c.is_pkey then
-            result_arr = result_arr || (
+            return next (
                 null,
                 is_rls_enabled,
                 (select array_agg(id) from realtime.subscription where entity = entity_ and claims_role = working_role),
@@ -389,7 +387,7 @@ begin
 
         -- The claims role does not have SELECT permission to the primary key of entity
         elsif action <> 'DELETE' and sum(c.is_selectable::int) <> count(1) from unnest(columns) c where c.is_pkey then
-            result_arr = result_arr || (
+            return next (
                 null,
                 is_rls_enabled,
                 (select array_agg(id) from realtime.subscription where entity = entity_ and claims_role = working_role),
@@ -482,7 +480,7 @@ begin
 
             perform set_config('role', null, true);
 
-            result_arr = result_arr || (
+            return next (
                 output,
                 is_rls_enabled,
                 visible_to_subscription_ids,
@@ -496,7 +494,5 @@ begin
     end loop;
 
     perform set_config('role', null, true);
-
-    return next unnest(result_arr);
 end;
 $$;

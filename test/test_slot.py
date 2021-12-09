@@ -216,6 +216,31 @@ def test_check_wal2json_settings(sess):
     assert "pk" in raw
 
 
+def test_subscribers_have_multiple_rows(sess):
+    """Multiple subscribers may have differing roles with different permissions"""
+    setup_note(sess)
+    insert_subscriptions(sess, role="authenticated")
+    insert_subscriptions(sess, role="postgres")
+    clear_wal(sess)
+    insert_notes(sess, n=1)
+    rows = sess.execute(QUERY).all()
+    assert len(rows) == 2
+
+    # Due to role permissions, the "authenticated" user's subscription
+    # should not contain references to the "dummy" column, but "postgres" should
+    record_keys_one = set(rows[0][1]["record"].keys())
+    record_keys_two = set(rows[1][1]["record"].keys())
+
+    assert record_keys_one.intersection(record_keys_two) == {
+        "id",
+        "body",
+        "arr_int",
+        "user_id",
+        "arr_text",
+    }
+    assert record_keys_one.difference(record_keys_two) == {"dummy"}
+
+
 def test_read_wal_w_visible_to_no_rls(sess):
     setup_note(sess)
     insert_subscriptions(sess)
@@ -453,8 +478,6 @@ select
     )
     sess.commit()
     clear_wal(sess)
-    assert row is None
-
     insert_notes(sess, n=1, body="bbb")
 
     if is_true:
