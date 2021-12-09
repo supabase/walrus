@@ -389,7 +389,7 @@ begin
         if action <> 'DELETE' and count(1) = 0 from unnest(columns) c where c.is_pkey then
             result_arr = result_arr || (
                 null,
-                null,
+                is_rls_enabled,
                 (select array_agg(id) from realtime.subscription where entity = entity_ and claims_role = working_role),
                 array['Error 400: Bad Request, no primary key']
             )::realtime.wal_rls;
@@ -398,7 +398,7 @@ begin
         elsif action <> 'DELETE' and sum(c.is_selectable::int) <> count(1) from unnest(columns) c where c.is_pkey then
             result_arr = result_arr || (
                 null,
-                null,
+                is_rls_enabled,
                 (select array_agg(id) from realtime.subscription where entity = entity_ and claims_role = working_role),
                 array['Error 401: Unauthorized']
             )::realtime.wal_rls;
