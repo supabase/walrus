@@ -98,13 +98,6 @@ begin
         perform realtime.cast(filter.value, col_type);
     end loop;
 
-    -- Apply consistent order to filters so the unique constraint on
-    -- (subscription_id, entity, filters) can't be tricked by a different filter order
-    new.filters = coalesce(
-        array_agg(f order by f.column_name, f.op, f.value),
-        '{}'
-    ) from unnest(new.filters) f;
-
     return new;
 end;
 $$;
