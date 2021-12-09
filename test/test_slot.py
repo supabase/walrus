@@ -120,6 +120,7 @@ from
     ) xyz
 where
     coalesce(pub.w2j_add_tables, '') <> ''
+    and array_length(xyz.subscription_ids, 1) > 0
 """
 )
 
@@ -293,6 +294,22 @@ def test_read_wal_w_visible_to_has_rls(sess):
     assert "dummy" not in columns_in_output
 
 
+def test_no_subscribers_skipped(sess):
+    """When a WAL record has no subscribers, it is filtered out"""
+    setup_note(sess)
+    sess.execute(
+        text(
+            """
+insert into public.note(user_id, body)
+values (extensions.uuid_generate_v4(), 'take out the trash');
+    """
+        )
+    )
+    sess.commit()
+    rows = sess.execute(QUERY).all()
+    assert len(rows) == 0
+
+
 def test_wal_update(sess):
     setup_note(sess)
     setup_note_rls(sess)
@@ -436,7 +453,14 @@ select
     )
     sess.commit()
     clear_wal(sess)
+    assert row is None
 
     insert_notes(sess, n=1, body="bbb")
-    raw, wal, is_rls_enabled, subscription_ids, errors = sess.execute(QUERY).one()
-    assert len(subscription_ids) == (1 if is_true else 0)
+
+    if is_true:
+        raw, wal, is_rls_enabled, subscription_ids, errors = sess.execute(QUERY).one()
+        assert len(subscription_ids) == 1
+    else:
+        # should be filtered out to reduce IO
+        row = sess.execute(QUERY).first()
+        assert row is None

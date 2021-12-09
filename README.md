@@ -246,6 +246,8 @@ from
         from
             realtime.apply_rls(data::jsonb) x(wal, is_rls_enabled, subcription_ids, errors)
     ) xyz
+where
+    array_length(xyz.subscription_ids, 1) > 0
 ```
 
 Or, if the stream should be filtered according to a publication:
@@ -308,6 +310,7 @@ from
     ) xyz
 where
     coalesce(pub.w2j_add_tables, '') <> ''
+    and array_length(xyz.subscription_ids, 1) > 0
 ```
 
 ## Configuration
