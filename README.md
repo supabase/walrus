@@ -60,7 +60,7 @@ This package exposes 1 public SQL function `realtime.apply_rls(jsonb)`. It proce
 
 - `wal`: (jsonb) The WAL record as JSONB in the form
 - `is_rls_enabled`: (bool) If the entity (table) the WAL record represents has row level security enabled
-- `users`: (uuid[]) An array users who should be notified about the WAL record
+- `subscription_ids`: (uuid[]) An array subscription ids that should be notified about the WAL record
 - `errors`: (text[]) An array of errors
 
 The jsonb WAL record is in the following format for inserts.
@@ -166,7 +166,7 @@ Ex:
 ```sql
 (
     null,                            -- wal
-    null,                            -- is_rls_enabled
+    true,                            -- is_rls_enabled
     [...],                              -- users,
     array['Error 400: Bad Request, no primary key'] -- errors
 )::realtime.wal_rls;
@@ -179,7 +179,7 @@ Ex:
 ```sql
 (
     null,                            -- wal
-    null,                            -- is_rls_enabled
+    true,                            -- is_rls_enabled
     [...],                              -- users,
     array['Error 401: Unauthorized'] -- errors
 )::realtime.wal_rls;
