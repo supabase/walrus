@@ -120,7 +120,7 @@ from
     ) xyz
 where
     coalesce(pub.w2j_add_tables, '') <> ''
-    and array_length(xyz.subscription_ids, 1) > 0
+    and xyz.subscription_ids[1] is not null
 """
 )
 
