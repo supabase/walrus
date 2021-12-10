@@ -28,7 +28,7 @@ create table realtime.subscription (
     entity regclass not null,
     filters realtime.user_defined_filter[] not null default '{}',
     claims jsonb not null,
-    claims_role regrole generated always as (realtime.to_regrole(claims ->> 'role')) stored,
+    claims_role regrole not null generated always as (realtime.to_regrole(claims ->> 'role')) stored,
     created_at timestamp not null default timezone('utc', now())
 );
 ```
@@ -173,7 +173,7 @@ Ex:
 ```
 
 ### Error 401: Unauthorized
-If a WAL record is passed through `realtime.apply_rls` and the `authenticated` role does not have permission to `select` the primary key columns in that table, an `Unauthorized` error is returned with no WAL data.
+If a WAL record is passed through `realtime.apply_rls` and the subscription's `clams_role` does not have permission to `select` the primary key columns in that table, an `Unauthorized` error is returned with no WAL data.
 
 Ex:
 ```sql
