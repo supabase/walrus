@@ -4,7 +4,6 @@
 */
 
 create schema realtime;
-grant usage on schema realtime to postgres;
 
 
 create type realtime.equality_op as enum(
@@ -106,9 +105,6 @@ create trigger tr_check_filters
     before insert or update on realtime.subscription
     for each row
     execute function realtime.subscription_check_filters();
-
-
-grant all on realtime.subscription to postgres;
 
 
 create or replace function realtime.quote_wal2json(entity regclass)
