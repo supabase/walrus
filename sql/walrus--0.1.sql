@@ -50,7 +50,7 @@ create table realtime.subscription (
     entity regclass not null,
     filters realtime.user_defined_filter[] not null default '{}',
     claims jsonb not null,
-    claims_role regrole generated always as (realtime.to_regrole(claims ->> 'role')) stored,
+    claims_role regrole not null generated always as (realtime.to_regrole(claims ->> 'role')) stored,
     created_at timestamp not null default timezone('utc', now())
 );
 create index ix_realtime_subscription_entity on realtime.subscription using hash (entity);
