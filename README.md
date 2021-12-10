@@ -167,7 +167,7 @@ Ex:
 (
     null,                            -- wal
     true,                            -- is_rls_enabled
-    [...],                              -- users,
+    [...],                           -- subscription_ids,
     array['Error 400: Bad Request, no primary key'] -- errors
 )::realtime.wal_rls;
 ```
@@ -180,7 +180,7 @@ Ex:
 (
     null,                            -- wal
     true,                            -- is_rls_enabled
-    [...],                              -- users,
+    [...],                           -- subscription_ids,
     array['Error 401: Unauthorized'] -- errors
 )::realtime.wal_rls;
 ```
@@ -193,7 +193,7 @@ Ex:
 (
     {..., "record": {}, "old_record": {}}, -- wal
     true,                                  -- is_rls_enabled
-    [...],                                 -- users,
+    [...],                                 -- subscription_ids,
     array['Error 413: Payload Too Large']  -- errors
 )::realtime.wal_rls;
 ```
@@ -202,10 +202,10 @@ Ex:
 
 Each WAL record is passed into `realtime.apply_rls(jsonb)` which:
 
-- impersonates each subscribed user by setting `request.jwt.claims` to an object with `sub` (user's id), `email` (user's email), and `role` ('authenticated')
+- impersonates each subscribed user by setting the appropriate role and `request.jwt.claims` that RLS policies depend on
 - queries for the row using its primary key values
 - applies the subscription's filters to check if the WAL record is filtered out
-- filters out all columns that are not visible to the `authenticated` role
+- filters out all columns that are not visible to the user's role
 
 ## Usage
 
