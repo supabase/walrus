@@ -290,22 +290,20 @@ declare
     -- Is row level security enabled for the table
     is_rls_enabled bool = relrowsecurity from pg_class where oid = entity_;
 
-    -- Subscription vars
-    roles regrole[] = array_agg(distinct claims_role)
-        from
-            realtime.subscription
-        where
-            entity = entity_;
-
-    working_role regrole;
-    claimed_role regrole;
-    claims jsonb;
-
     subscriptions realtime.subscription[] = array_agg(subs)
         from
             realtime.subscription subs
         where
             subs.entity = entity_;
+
+    -- Subscription vars
+    roles regrole[] = array_agg(distinct us.claims_role)
+        from
+            unnest(subscriptions) us;
+
+    working_role regrole;
+    claimed_role regrole;
+    claims jsonb;
 
     subscription_id uuid;
     subscription_has_access bool;
@@ -387,7 +385,8 @@ begin
             return next (
                 null,
                 is_rls_enabled,
-                (select array_agg(s.subscription_id) from realtime.subscription as s where entity = entity_ and claims_role = working_role),
+                -- subscriptions is already filtered by entity
+                (select array_agg(s.subscription_id) from unnest(subscriptions) as s where claims_role = working_role),
                 array['Error 400: Bad Request, no primary key']
             )::realtime.wal_rls;
 
@@ -396,7 +395,7 @@ begin
             return next (
                 null,
                 is_rls_enabled,
-                (select array_agg(s.subscription_id) from realtime.subscription as s where entity = entity_ and claims_role = working_role),
+                (select array_agg(s.subscription_id) from unnest(subscriptions) as s where claims_role = working_role),
                 array['Error 401: Unauthorized']
             )::realtime.wal_rls;
 
