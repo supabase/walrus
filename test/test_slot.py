@@ -165,7 +165,7 @@ def insert_subscriptions(sess, role: str = "authenticated", n=1):
     sess.execute(
         text(
             """
-insert into realtime.subscription(id, entity, claims)
+insert into realtime.subscription(subscription_id, entity, claims)
 select
     extensions.uuid_generate_v4(),
     'public.note',
@@ -267,7 +267,7 @@ revoke select on public.unauthorized from authenticated;
     sess.execute(
         text(
             """
-insert into realtime.subscription(id, entity, claims)
+insert into realtime.subscription(subscription_id, entity, claims)
 select extensions.uuid_generate_v4(), 'public.unauthorized', jsonb_build_object('role', 'authenticated');
     """
         )
@@ -465,7 +465,7 @@ def test_user_defined_eq_filter(filter_str, is_true, sess):
     # Test does not match
     sess.execute(
         f"""
-insert into realtime.subscription(id, entity, filters, claims)
+insert into realtime.subscription(subscription_id, entity, filters, claims)
 select
     extensions.uuid_generate_v4(),
     'public.note',

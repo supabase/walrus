@@ -45,12 +45,15 @@ as $$ select role_name::regrole $$;
 
 create table realtime.subscription (
     -- Tracks which subscriptions are active
-    id uuid primary key,
+    id bigint generated always as identity primary key,
+    subscription_id uuid not null,
     entity regclass not null,
     filters realtime.user_defined_filter[] not null default '{}',
     claims jsonb not null,
     claims_role regrole not null generated always as (realtime.to_regrole(claims ->> 'role')) stored,
-    created_at timestamp not null default timezone('utc', now())
+    created_at timestamp not null default timezone('utc', now()),
+
+    unique (subscription_id, entity, filters)
 );
 create index ix_realtime_subscription_entity on realtime.subscription using hash (entity);
 
@@ -96,6 +99,13 @@ begin
         -- raises an exception if value is not coercable to type
         perform realtime.cast(filter.value, col_type);
     end loop;
+
+    -- Apply consistent order to filters so the unique constraint on
+    -- (subscription_id, entity, filters) can't be tricked by a different filter order
+    new.filters = coalesce(
+        array_agg(f order by f.column_name, f.op, f.value),
+        '{}'
+    ) from unnest(new.filters) f;
 
     return new;
 end;
@@ -377,7 +387,7 @@ begin
             return next (
                 null,
                 is_rls_enabled,
-                (select array_agg(id) from realtime.subscription where entity = entity_ and claims_role = working_role),
+                (select array_agg(s.subscription_id) from realtime.subscription as s where entity = entity_ and claims_role = working_role),
                 array['Error 400: Bad Request, no primary key']
             )::realtime.wal_rls;
 
@@ -386,7 +396,7 @@ begin
             return next (
                 null,
                 is_rls_enabled,
-                (select array_agg(id) from realtime.subscription where entity = entity_ and claims_role = working_role),
+                (select array_agg(s.subscription_id) from realtime.subscription as s where entity = entity_ and claims_role = working_role),
                 array['Error 401: Unauthorized']
             )::realtime.wal_rls;
 
@@ -448,7 +458,7 @@ begin
 
             for subscription_id, claims in (
                     select
-                        subs.id,
+                        subs.subscription_id,
                         subs.claims
                     from
                         unnest(subscriptions) subs

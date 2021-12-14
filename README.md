@@ -24,12 +24,15 @@ User subscriptions are managed through a table
 
 ```sql
 create table realtime.subscription (
-    id uuid primary key,
+    id bigint generated always as identity primary key,
+    subscription_id uuid not null,
     entity regclass not null,
     filters realtime.user_defined_filter[] not null default '{}',
     claims jsonb not null,
     claims_role regrole not null generated always as (realtime.to_regrole(claims ->> 'role')) stored,
-    created_at timestamp not null default timezone('utc', now())
+    created_at timestamp not null default timezone('utc', now()),
+
+    unique (subscription_id, entity, filters)
 );
 ```
 where `realtime.user_defined_filter` is
@@ -49,7 +52,7 @@ create type realtime.equality_op as enum(
 
 For example, to subscribe to a table named `public.notes` where the `id` is `6` as the `authenticated` role:
 ```sql
-insert into realtime.subscription(id, entity, filters, claims)
+insert into realtime.subscription(subscription_id, entity, filters, claims)
 values ('832bd278-dac7-4bef-96be-e21c8a0023c4', 'public.notes', array[('id', 'eq', '6')], '{"role", "authenticated"}');
 ```
 
