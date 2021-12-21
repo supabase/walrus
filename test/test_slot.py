@@ -72,54 +72,54 @@ with pub as (
             case when bool_or(pubupdate) then 'update' else null end,
             case when bool_or(pubdelete) then 'delete' else null end
         ) as w2j_actions,
-        string_agg(realtime.quote_wal2json(format('%I.%I', schemaname, tablename)::regclass), ',') w2j_add_tables
+        coalesce(
+            string_agg(
+                realtime.quote_wal2json(format('%I.%I', schemaname, tablename)::regclass),
+                ','
+            ) filter (where ppt.tablename is not null),
+            ''
+        ) w2j_add_tables
     from
         pg_publication pp
-        join pg_publication_tables ppt
-          on pp.pubname = ppt.pubname
+        left join pg_publication_tables ppt
+            on pp.pubname = ppt.pubname
     where
         pp.pubname = 'supabase_realtime'
     group by
         pp.pubname
     limit 1
-)
-select
-    w2j.data::jsonb raw,
-    xyz.wal,
-    xyz.is_rls_enabled,
-    xyz.subscription_ids,
-    xyz.errors
-from
-    pub,
-    lateral (
-      select
-        *
-      from
-        pg_logical_slot_get_changes(
+),
+w2j as (
+    select
+        x.*, pub.w2j_add_tables
+    from
+         pub, -- always returns 1 row. possibly null entries
+         pg_logical_slot_get_changes(
             'realtime', null, null,
             'include-pk', '1',
             'include-transaction', 'false',
             'include-timestamp', 'true',
             'write-in-chunks', 'true',
             'format-version', '2',
-            'actions', coalesce(pub.w2j_actions, ''),
+            'actions', pub.w2j_actions,
             'add-tables', pub.w2j_add_tables
-        )
-    ) w2j,
-      lateral (
-        select
-            x.wal,
-            x.is_rls_enabled,
-            x.subscription_ids,
-            x.errors
-        from
-            realtime.apply_rls(
-                wal := w2j.data::jsonb,
-                max_record_bytes := 1048576
-            ) x(wal, is_rls_enabled, subscription_ids, errors)
-    ) xyz
+        ) x
+)
+select
+    w2j.data::jsonb,
+    xyz.wal,
+    xyz.is_rls_enabled,
+    xyz.subscription_ids,
+    xyz.errors
+from
+    w2j,
+    realtime.apply_rls(
+        wal := w2j.data::jsonb,
+        max_record_bytes := 1048576
+    ) xyz(wal, is_rls_enabled, subscription_ids, errors)
 where
-    coalesce(pub.w2j_add_tables, '') <> ''
+    -- filter from w2j instead of pub to force `pg_logical_get_slots` to be called
+    w2j.w2j_add_tables <> ''
     and xyz.subscription_ids[1] is not null
 """
 )
