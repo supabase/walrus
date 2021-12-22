@@ -247,7 +247,9 @@ from
             x.subscription_ids,
             x.errors
         from
-            realtime.apply_rls(data::jsonb) x(wal, is_rls_enabled, subcription_ids, errors)
+            realtime.apply_rls(
+                wal := realtime.bugfix_w2j_typenames(data)::jsonb,
+            ) x(wal, is_rls_enabled, subcription_ids, errors)
     ) xyz
 where
     xyz.subscription_ids[1] is not null
@@ -307,7 +309,7 @@ select
 from
     w2j,
     realtime.apply_rls(
-        wal := w2j.data::jsonb,
+        wal := realtime.bugfix_w2j_typenames(w2j.data)::jsonb,
         max_record_bytes := 1048576
     ) xyz(wal, is_rls_enabled, subscription_ids, errors)
 where

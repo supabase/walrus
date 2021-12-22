@@ -6,6 +6,47 @@
 create schema realtime;
 
 
+create or replace function realtime.bugfix_w2j_typenames(data text)
+    returns text
+    immutable
+    language plpgsql
+    as
+$$
+declare
+    tokens text[];
+begin
+/*
+wal2json's format_version 2 does not escape type names correctly for json
+which leads to `"abCde"` being rendered as `""abCde""` and causing casts
+to jsonb to fail.
+
+This function find each instance of
+    "type":""<typenamee>""
+    and replaces it with
+    "type": "<typename>"
+
+to allow casts to jsonb to succeed
+
+This function should be removed once the referenced issues below close.
+
+Linked Issues:
+    https://github.com/eulerto/wal2json/issues/224
+    https://github.com/supabase/walrus/issues/31
+*/
+    for tokens in
+        select distinct regexp_matches(data, '"type":"("(.*?)")",', 'g')
+        loop
+        data = replace(
+            data,
+            format('"type":"%s",', tokens[1]),
+            format('"type":"%s",', tokens[2])
+        );
+    end loop;
+    return data;
+end;
+$$;
+
+
 create type realtime.equality_op as enum(
     'eq', 'neq', 'lt', 'lte', 'gt', 'gte'
 );
