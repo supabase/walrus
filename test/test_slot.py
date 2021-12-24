@@ -284,7 +284,8 @@ values (1)
     )
     sess.commit()
     _, wal, is_rls_enabled, subscription_ids, errors = sess.execute(QUERY).one()
-    assert (wal, is_rls_enabled) == (None, False)
+    assert wal == {"type": "INSERT", "table": "unauthorized", "schema": "public"}
+    assert is_rls_enabled == False
     assert len(subscription_ids) == 1
     assert len(errors) == 1
     assert errors[0] == "Error 401: Unauthorized"
@@ -407,8 +408,14 @@ def test_error_413_payload_too_large(sess):
     _, wal, is_rls_enabled, subscription_ids, errors = sess.execute(QUERY).one()
     UpdateWAL.parse_obj(wal)
     assert any(["413" in x for x in errors])
-    assert wal["old_record"] == {}
-    assert wal["record"] == {}
+    for key, value in {
+        "type": "UPDATE",
+        "table": "note",
+        "schema": "public",
+        "record": {},
+        "old_record": {},
+    }.items():
+        assert wal[key] == value
     assert len(subscription_ids) == 2
     assert not is_rls_enabled
 
@@ -428,9 +435,9 @@ alter table public.note drop constraint note_pkey;
     insert_notes(sess)
     sess.commit()
     _, wal, is_rls_enabled, subscription_ids, errors = sess.execute(QUERY).one()
+    assert wal == {"type": "INSERT", "table": "note", "schema": "public"}
     assert len(errors) == 1
     assert errors[0] == "Error 400: Bad Request, no primary key"
-    assert wal is None
     assert not is_rls_enabled
     assert len(subscription_ids) == 1
 

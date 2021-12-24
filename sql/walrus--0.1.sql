@@ -383,7 +383,11 @@ begin
 
         if action <> 'DELETE' and count(1) = 0 from unnest(columns) c where c.is_pkey then
             return next (
-                null,
+                jsonb_build_object(
+                    'schema', wal ->> 'schema',
+                    'table', wal ->> 'table',
+                    'type', action
+                ),
                 is_rls_enabled,
                 -- subscriptions is already filtered by entity
                 (select array_agg(s.subscription_id) from unnest(subscriptions) as s where claims_role = working_role),
@@ -393,7 +397,11 @@ begin
         -- The claims role does not have SELECT permission to the primary key of entity
         elsif action <> 'DELETE' and sum(c.is_selectable::int) <> count(1) from unnest(columns) c where c.is_pkey then
             return next (
-                null,
+                jsonb_build_object(
+                    'schema', wal ->> 'schema',
+                    'table', wal ->> 'table',
+                    'type', action
+                ),
                 is_rls_enabled,
                 (select array_agg(s.subscription_id) from unnest(subscriptions) as s where claims_role = working_role),
                 array['Error 401: Unauthorized']
