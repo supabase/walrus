@@ -51,8 +51,6 @@ def sess(engine):
     conn.execute(
         text(
             """
-set search_path = '';
-
 create table public.note(
     id bigserial primary key,
     user_id uuid not null,
