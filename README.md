@@ -222,8 +222,6 @@ A complete list of config options can be found [here](https://github.com/eulerto
 The stream can be polled with
 
 ```sql
-set search_path = '';
-
 select
     xyz.wal,
     xyz.is_rls_enabled,
@@ -256,8 +254,6 @@ where
 Or, if the stream should be filtered according to a publication:
 
 ```sql
-set search_path = '';
-
 with pub as (
     select
         concat_ws(
