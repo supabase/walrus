@@ -168,7 +168,11 @@ If a WAL record for a table that does not have a primary key is passed through `
 Ex:
 ```sql
 (
-    null,                            -- wal
+    {
+        "type": ...,
+        "schema": ...,
+        "table": ...
+    },                               -- wal
     true,                            -- is_rls_enabled
     [...],                           -- subscription_ids,
     array['Error 400: Bad Request, no primary key'] -- errors
@@ -181,7 +185,11 @@ If a WAL record is passed through `realtime.apply_rls` and the subscription's `c
 Ex:
 ```sql
 (
-    null,                            -- wal
+    {
+        "type": ...,
+        "schema": ...,
+        "table": ...
+    },                               -- wal
     true,                            -- is_rls_enabled
     [...],                           -- subscription_ids,
     array['Error 401: Unauthorized'] -- errors
