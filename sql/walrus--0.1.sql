@@ -4,8 +4,6 @@
 */
 
 create schema realtime;
-grant usage on schema realtime to postgres;
-grant usage on schema realtime to authenticated;
 
 
 create type realtime.equality_op as enum(
@@ -37,18 +35,25 @@ create type realtime.user_defined_filter as (
 );
 
 
+create function realtime.to_regrole(role_name text)
+    returns regrole
+    immutable
+    language sql
+    -- required to allow use in generated clause
+as $$ select role_name::regrole $$;
+
+
 create table realtime.subscription (
-    -- Tracks which users are subscribed to each table
-    id bigint not null generated always as identity,
-    user_id uuid not null,
-    -- Populated automatically by trigger. Required to enable auth.email()
-    email varchar(255),
+    -- Tracks which subscriptions are active
+    id bigint generated always as identity primary key,
+    subscription_id uuid not null,
     entity regclass not null,
     filters realtime.user_defined_filter[] not null default '{}',
+    claims jsonb not null,
+    claims_role regrole not null generated always as (realtime.to_regrole(claims ->> 'role')) stored,
     created_at timestamp not null default timezone('utc', now()),
 
-    constraint pk_subscription primary key (id),
-    unique (entity, user_id, filters)
+    unique (subscription_id, entity, filters)
 );
 create index ix_realtime_subscription_entity on realtime.subscription using hash (entity);
 
@@ -59,7 +64,7 @@ create function realtime.subscription_check_filters()
 as $$
 /*
 Validates that the user defined filters for a subscription:
-- refer to valid columns that "authenticated" may access
+- refer to valid columns that the claimed role may access
 - values are coercable to the correct column type
 */
 declare
@@ -70,8 +75,8 @@ declare
         from
             information_schema.columns c
         where
-            (quote_ident(c.table_schema) || '.' || quote_ident(c.table_name))::regclass = new.entity
-            and pg_catalog.has_column_privilege('authenticated', new.entity, c.column_name, 'SELECT');
+            format('%I.%I', c.table_schema, c.table_name)::regclass = new.entity
+            and pg_catalog.has_column_privilege((new.claims ->> 'role'), new.entity, c.column_name, 'SELECT');
     filter realtime.user_defined_filter;
     col_type regtype;
 begin
@@ -96,7 +101,7 @@ begin
     end loop;
 
     -- Apply consistent order to filters so the unique constraint on
-    -- (user_id, entity, filters) can't be tricked by a different filter order
+    -- (subscription_id, entity, filters) can't be tricked by a different filter order
     new.filters = coalesce(
         array_agg(f order by f.column_name, f.op, f.value),
         '{}'
@@ -110,10 +115,6 @@ create trigger tr_check_filters
     before insert or update on realtime.subscription
     for each row
     execute function realtime.subscription_check_filters();
-
-
-grant all on realtime.subscription to postgres;
-grant select on realtime.subscription to authenticated;
 
 
 create or replace function realtime.quote_wal2json(entity regclass)
@@ -232,7 +233,7 @@ $$;
 create type realtime.wal_rls as (
     wal jsonb,
     is_rls_enabled boolean,
-    users uuid[],
+    subscription_ids uuid[],
     errors text[]
 );
 
@@ -268,7 +269,7 @@ $$;
 
 
 create or replace function realtime.apply_rls(wal jsonb, max_record_bytes int = 1024 * 1024)
-    returns realtime.wal_rls
+    returns setof realtime.wal_rls
     language plpgsql
     volatile
 as $$
@@ -289,30 +290,46 @@ declare
     -- Is row level security enabled for the table
     is_rls_enabled bool = relrowsecurity from pg_class where oid = entity_;
 
-    -- Subscription vars
-    user_id uuid;
-    email varchar(255);
-    user_has_access bool;
-    is_visible_to_user boolean;
-    visible_to_user_ids uuid[] = '{}';
-
-    -- user subscriptions to the wal record's table
-    subscriptions realtime.subscription[] =
-            array_agg(sub)
+    subscriptions realtime.subscription[] = array_agg(subs)
         from
-            realtime.subscription sub
+            realtime.subscription subs
         where
-            sub.entity = entity_;
+            subs.entity = entity_;
+
+    -- Subscription vars
+    roles regrole[] = array_agg(distinct us.claims_role)
+        from
+            unnest(subscriptions) us;
+
+    working_role regrole;
+    claimed_role regrole;
+    claims jsonb;
+
+    subscription_id uuid;
+    subscription_has_access bool;
+    visible_to_subscription_ids uuid[] = '{}';
 
     -- structured info for wal's columns
-    columns realtime.wal_column[] =
+    columns realtime.wal_column[];
+    -- previous identity values for update/delete
+    old_columns realtime.wal_column[];
+
+    error_record_exceeds_max_size boolean = octet_length(wal::text) > max_record_bytes;
+
+    -- Primary jsonb output for record
+    output jsonb;
+
+begin
+    perform set_config('role', null, true);
+
+    columns =
         array_agg(
             (
                 x->>'name',
                 x->>'type',
                 realtime.cast((x->'value') #>> '{}', (x->>'type')::regtype),
                 (pks ->> 'name') is not null,
-                pg_catalog.has_column_privilege('authenticated', entity_, x->>'name', 'SELECT')
+                true
             )::realtime.wal_column
         )
         from
@@ -320,15 +337,14 @@ declare
             left join jsonb_array_elements(wal -> 'pk') pks
                 on (x ->> 'name') = (pks ->> 'name');
 
-    -- previous identity values for update/delete
-    old_columns realtime.wal_column[] =
+    old_columns =
         array_agg(
             (
                 x->>'name',
                 x->>'type',
                 realtime.cast((x->'value') #>> '{}', (x->>'type')::regtype),
                 (pks ->> 'name') is not null,
-                pg_catalog.has_column_privilege('authenticated', entity_, x->>'name', 'SELECT')
+                true
             )::realtime.wal_column
         )
         from
@@ -336,136 +352,160 @@ declare
             left join jsonb_array_elements(wal -> 'pk') pks
                 on (x ->> 'name') = (pks ->> 'name');
 
-    output jsonb;
+    for working_role in select * from unnest(roles) loop
 
-    -- Error states
-    error_record_exceeds_max_size boolean = octet_length(wal::text) > max_record_bytes;
-    error_unauthorized boolean = not pg_catalog.has_any_column_privilege('authenticated', entity_, 'SELECT');
-
-    errors text[] = case
-        when error_record_exceeds_max_size then array['Error 413: Payload Too Large']
-        else '{}'::text[]
-    end;
-begin
-
-    -- The 'authenticated' user does not have SELECT permission on any of the columns for the entity_
-    if error_unauthorized is true then
-        return (
-            null,
-            null,
-            visible_to_user_ids,
-            array['Error 401: Unauthorized']
-        )::realtime.wal_rls;
-    end if;
-
-    -------------------------------
-    -- Build Output JSONB Object --
-    -------------------------------
-    output = jsonb_build_object(
-        'schema', wal ->> 'schema',
-        'table', wal ->> 'table',
-        'type', action,
-        'commit_timestamp', (wal ->> 'timestamp')::text::timestamp with time zone,
-        'columns', (
-            select
-                jsonb_agg(
-                    jsonb_build_object(
-                        'name', pa.attname,
-                        'type', pt.typname
-                    )
-                    order by pa.attnum asc
-                )
+        -- Update `is_selectable` for columns and old_columns
+        columns =
+            array_agg(
+                (
+                    c.name,
+                    c.type,
+                    c.value,
+                    c.is_pkey,
+                    pg_catalog.has_column_privilege(working_role, entity_, c.name, 'SELECT')
+                )::realtime.wal_column
+            )
             from
-                pg_attribute pa
-                join pg_type pt
-                    on pa.atttypid = pt.oid
-            where
-                attrelid = entity_
-                and attnum > 0
-                and pg_catalog.has_column_privilege('authenticated', entity_, pa.attname, 'SELECT')
-        )
-    )
-    -- Add "record" key for insert and update
-    || case
-        when error_record_exceeds_max_size then jsonb_build_object('record', '{}'::jsonb)
-        when action in ('INSERT', 'UPDATE') then
-            jsonb_build_object(
-                'record',
-                (select jsonb_object_agg((c).name, (c).value) from unnest(columns) c where (c).is_selectable)
-            )
-        else '{}'::jsonb
-    end
-    -- Add "old_record" key for update and delete
-    || case
-        when error_record_exceeds_max_size then jsonb_build_object('old_record', '{}'::jsonb)
-        when action in ('UPDATE', 'DELETE') then
-            jsonb_build_object(
-                'old_record',
-                (select jsonb_object_agg((c).name, (c).value) from unnest(old_columns) c where (c).is_selectable)
-            )
-        else '{}'::jsonb
-    end;
+                unnest(columns) c;
 
-    if action = 'DELETE' then
-        visible_to_user_ids = array_agg(s.user_id) from unnest(subscriptions) s;
-    else
-        -- If RLS is on and someone is subscribed to the table prep
-        if is_rls_enabled and array_length(subscriptions, 1) > 0 then
-            perform set_config('role', 'authenticated', true);
-            if (select 1 from pg_prepared_statements where name = 'walrus_rls_stmt' limit 1) > 0 then
-                deallocate walrus_rls_stmt;
+        old_columns =
+                array_agg(
+                    (
+                        c.name,
+                        c.type,
+                        c.value,
+                        c.is_pkey,
+                        pg_catalog.has_column_privilege(working_role, entity_, c.name, 'SELECT')
+                    )::realtime.wal_column
+                )
+                from
+                    unnest(old_columns) c;
+
+        if action <> 'DELETE' and count(1) = 0 from unnest(columns) c where c.is_pkey then
+            return next (
+                jsonb_build_object(
+                    'schema', wal ->> 'schema',
+                    'table', wal ->> 'table',
+                    'type', action
+                ),
+                is_rls_enabled,
+                -- subscriptions is already filtered by entity
+                (select array_agg(s.subscription_id) from unnest(subscriptions) as s where claims_role = working_role),
+                array['Error 400: Bad Request, no primary key']
+            )::realtime.wal_rls;
+
+        -- The claims role does not have SELECT permission to the primary key of entity
+        elsif action <> 'DELETE' and sum(c.is_selectable::int) <> count(1) from unnest(columns) c where c.is_pkey then
+            return next (
+                jsonb_build_object(
+                    'schema', wal ->> 'schema',
+                    'table', wal ->> 'table',
+                    'type', action
+                ),
+                is_rls_enabled,
+                (select array_agg(s.subscription_id) from unnest(subscriptions) as s where claims_role = working_role),
+                array['Error 401: Unauthorized']
+            )::realtime.wal_rls;
+
+        else
+            output = jsonb_build_object(
+                'schema', wal ->> 'schema',
+                'table', wal ->> 'table',
+                'type', action,
+                'commit_timestamp', (wal ->> 'timestamp')::text::timestamp with time zone,
+                'columns', (
+                    select
+                        jsonb_agg(
+                            jsonb_build_object(
+                                'name', pa.attname,
+                                'type', pt.typname
+                            )
+                            order by pa.attnum asc
+                        )
+                    from
+                        pg_attribute pa
+                        join pg_type pt
+                            on pa.atttypid = pt.oid
+                    where
+                        attrelid = entity_
+                        and attnum > 0
+                        and pg_catalog.has_column_privilege(working_role, entity_, pa.attname, 'SELECT')
+                )
+            )
+            -- Add "record" key for insert and update
+            || case
+                when error_record_exceeds_max_size then jsonb_build_object('record', '{}'::jsonb)
+                when action in ('INSERT', 'UPDATE') then
+                    jsonb_build_object(
+                        'record',
+                        (select jsonb_object_agg((c).name, (c).value) from unnest(columns) c where (c).is_selectable)
+                    )
+                else '{}'::jsonb
+            end
+            -- Add "old_record" key for update and delete
+            || case
+                when error_record_exceeds_max_size then jsonb_build_object('old_record', '{}'::jsonb)
+                when action in ('UPDATE', 'DELETE') then
+                    jsonb_build_object(
+                        'old_record',
+                        (select jsonb_object_agg((c).name, (c).value) from unnest(old_columns) c where (c).is_selectable)
+                    )
+                else '{}'::jsonb
+            end;
+
+            -- Create the prepared statement
+            if is_rls_enabled and action <> 'DELETE' then
+                if (select 1 from pg_prepared_statements where name = 'walrus_rls_stmt' limit 1) > 0 then
+                    deallocate walrus_rls_stmt;
+                end if;
+                execute realtime.build_prepared_statement_sql('walrus_rls_stmt', entity_, columns);
             end if;
-            execute realtime.build_prepared_statement_sql('walrus_rls_stmt', entity_, columns);
+
+            visible_to_subscription_ids = '{}';
+
+            for subscription_id, claims in (
+                    select
+                        subs.subscription_id,
+                        subs.claims
+                    from
+                        unnest(subscriptions) subs
+                    where
+                        subs.entity = entity_
+                        and subs.claims_role = working_role
+                        and realtime.is_visible_through_filters(columns, subs.filters)
+            ) loop
+
+                if not is_rls_enabled or action = 'DELETE' then
+                    visible_to_subscription_ids = visible_to_subscription_ids || subscription_id;
+                else
+                    -- Check if RLS allows the role to see the record
+                    perform
+                        set_config('role', working_role::text, true),
+                        set_config('request.jwt.claims', claims::text, true);
+
+                    execute 'execute walrus_rls_stmt' into subscription_has_access;
+
+                    if subscription_has_access then
+                        visible_to_subscription_ids = visible_to_subscription_ids || subscription_id;
+                    end if;
+                end if;
+            end loop;
+
+            perform set_config('role', null, true);
+
+            return next (
+                output,
+                is_rls_enabled,
+                visible_to_subscription_ids,
+                case
+                    when error_record_exceeds_max_size then array['Error 413: Payload Too Large']
+                    else '{}'
+                end
+            )::realtime.wal_rls;
 
         end if;
+    end loop;
 
-        -- For each subscribed user
-        for user_id, email, is_visible_to_user in (
-                select
-                    subs.user_id,
-                    subs.email,
-                    realtime.is_visible_through_filters(columns, subs.filters)
-                from
-                    unnest(subscriptions) subs
-        )
-        loop
-            if is_visible_to_user then
-                -- If RLS is off, add to visible users
-                if not is_rls_enabled then
-                    visible_to_user_ids = visible_to_user_ids || user_id;
-                else
-                    -- Check if RLS allows the user to see the record
-                    perform
-                        set_config(
-                            'request.jwt.claims',
-                            jsonb_build_object(
-                                'sub', user_id::text,
-                                'email', email::text,
-                                'role', 'authenticated'
-                            )::text,
-                            true
-                        );
-                    execute 'execute walrus_rls_stmt' into user_has_access;
-
-                    if user_has_access then
-                        visible_to_user_ids = visible_to_user_ids || user_id;
-                    end if;
-
-                end if;
-            end if;
-        end loop;
-
-        perform (
-            set_config('role', null, true)
-        );
-
-    end if;
-
-    return (
-        output,
-        is_rls_enabled,
-        visible_to_user_ids,
-        errors
-    )::realtime.wal_rls;
+    perform set_config('role', null, true);
 end;
 $$;

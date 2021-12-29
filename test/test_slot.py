@@ -72,54 +72,55 @@ with pub as (
             case when bool_or(pubupdate) then 'update' else null end,
             case when bool_or(pubdelete) then 'delete' else null end
         ) as w2j_actions,
-        string_agg(realtime.quote_wal2json(format('%I.%I', schemaname, tablename)::regclass), ',') w2j_add_tables
+        coalesce(
+            string_agg(
+                realtime.quote_wal2json(format('%I.%I', schemaname, tablename)::regclass),
+                ','
+            ) filter (where ppt.tablename is not null),
+            ''
+        ) w2j_add_tables
     from
         pg_publication pp
-        join pg_publication_tables ppt
-          on pp.pubname = ppt.pubname
+        left join pg_publication_tables ppt
+            on pp.pubname = ppt.pubname
     where
         pp.pubname = 'supabase_realtime'
     group by
         pp.pubname
     limit 1
-)
-select
-    w2j.data::jsonb raw,
-    xyz.wal,
-    xyz.is_rls_enabled,
-    xyz.users,
-    xyz.errors
-from
-    pub,
-    lateral (
-      select
-        *
-      from
-        pg_logical_slot_get_changes(
+),
+w2j as (
+    select
+        x.*, pub.w2j_add_tables
+    from
+         pub, -- always returns 1 row. possibly null entries
+         pg_logical_slot_get_changes(
             'realtime', null, null,
             'include-pk', '1',
             'include-transaction', 'false',
             'include-timestamp', 'true',
             'write-in-chunks', 'true',
             'format-version', '2',
-            'actions', coalesce(pub.w2j_actions, ''),
+            'actions', pub.w2j_actions,
             'add-tables', pub.w2j_add_tables
-        )
-    ) w2j,
-      lateral (
-        select
-            x.wal,
-            x.is_rls_enabled,
-            x.users,
-            x.errors
-        from
-            realtime.apply_rls(
-                wal := w2j.data::jsonb,
-                max_record_bytes := 1048576
-            ) x(wal, is_rls_enabled, users, errors)
-    ) xyz
+        ) x
+)
+select
+    w2j.data::jsonb,
+    xyz.wal,
+    xyz.is_rls_enabled,
+    xyz.subscription_ids,
+    xyz.errors
+from
+    w2j,
+    realtime.apply_rls(
+        wal := w2j.data::jsonb,
+        max_record_bytes := 1048576
+    ) xyz(wal, is_rls_enabled, subscription_ids, errors)
 where
-    coalesce(pub.w2j_add_tables, '') <> ''
+    -- filter from w2j instead of pub to force `pg_logical_get_slots` to be called
+    w2j.w2j_add_tables <> ''
+    and xyz.subscription_ids[1] is not null
 """
 )
 
@@ -160,15 +161,23 @@ alter table public.note enable row level security;
     sess.commit()
 
 
-def insert_subscriptions(sess, filters: Dict[str, Any] = {}, n=1):
+def insert_subscriptions(sess, role: str = "authenticated", n=1):
     sess.execute(
         text(
             """
-insert into realtime.subscription(user_id, entity)
-select extensions.uuid_generate_v4(), 'public.note' from generate_series(1,:n);
+insert into realtime.subscription(subscription_id, entity, claims)
+select
+    extensions.uuid_generate_v4(),
+    'public.note',
+    jsonb_build_object(
+        'role', :role,
+        'email', 'example@example.com',
+        'sub', extensions.uuid_generate_v4()::text
+    )
+    from generate_series(1,:n);
     """
         ),
-        {"n": n},
+        {"n": n, "role": role},
     )
     sess.commit()
 
@@ -178,7 +187,7 @@ def insert_notes(sess, body="take out the trash", n=1):
         text(
             """
 insert into public.note(user_id, body)
-select user_id, :body from realtime.subscription order by id limit :n;
+select (claims ->> 'sub')::uuid, :body from realtime.subscription order by id limit :n;
     """
         ),
         {"n": n, "body": body},
@@ -207,17 +216,42 @@ def test_check_wal2json_settings(sess):
     assert "pk" in raw
 
 
+def test_subscribers_have_multiple_rows(sess):
+    """Multiple subscribers may have differing roles with different permissions"""
+    setup_note(sess)
+    insert_subscriptions(sess, role="authenticated")
+    insert_subscriptions(sess, role="postgres")
+    clear_wal(sess)
+    insert_notes(sess, n=1)
+    rows = sess.execute(QUERY).all()
+    assert len(rows) == 2
+
+    # Due to role permissions, the "authenticated" user's subscription
+    # should not contain references to the "dummy" column, but "postgres" should
+    record_keys_one = set(rows[0][1]["record"].keys())
+    record_keys_two = set(rows[1][1]["record"].keys())
+
+    assert record_keys_one.intersection(record_keys_two) == {
+        "id",
+        "body",
+        "arr_int",
+        "user_id",
+        "arr_text",
+    }
+    assert record_keys_one.difference(record_keys_two) == {"dummy"}
+
+
 def test_read_wal_w_visible_to_no_rls(sess):
     setup_note(sess)
     insert_subscriptions(sess)
     clear_wal(sess)
     insert_notes(sess)
-    _, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
+    _, wal, is_rls_enabled, subscription_ids, errors = sess.execute(QUERY).one()
     InsertWAL.parse_obj(wal)
     assert errors == []
     assert not is_rls_enabled
     # visible_to includes subscribed user when no rls enabled
-    assert len(users) == 1
+    assert len(subscription_ids) == 1
 
     assert [x for x in wal["columns"] if x["name"] == "id"][0]["type"] == "int8"
 
@@ -233,8 +267,8 @@ revoke select on public.unauthorized from authenticated;
     sess.execute(
         text(
             """
-insert into realtime.subscription(user_id, entity)
-select extensions.uuid_generate_v4(), 'public.unauthorized';
+insert into realtime.subscription(subscription_id, entity, claims)
+select extensions.uuid_generate_v4(), 'public.unauthorized', jsonb_build_object('role', 'authenticated');
     """
         )
     )
@@ -249,8 +283,10 @@ values (1)
         )
     )
     sess.commit()
-    _, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
-    assert (wal, is_rls_enabled, users) == (None, None, [])
+    _, wal, is_rls_enabled, subscription_ids, errors = sess.execute(QUERY).one()
+    assert wal == {"type": "INSERT", "table": "unauthorized", "schema": "public"}
+    assert is_rls_enabled == False
+    assert len(subscription_ids) == 1
     assert len(errors) == 1
     assert errors[0] == "Error 401: Unauthorized"
 
@@ -262,7 +298,7 @@ def test_read_wal_w_visible_to_has_rls(sess):
     clear_wal(sess)
     insert_notes(sess, n=1)
     sess.commit()
-    _, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
+    _, wal, is_rls_enabled, subscription_ids, errors = sess.execute(QUERY).one()
     InsertWAL.parse_obj(wal)
     assert errors == []
     assert wal["record"]["id"] == 1
@@ -272,16 +308,32 @@ def test_read_wal_w_visible_to_has_rls(sess):
     assert [x for x in wal["columns"] if x["name"] == "arr_int"][0]["type"] == "_int4"
 
     assert is_rls_enabled
-    # 2 permitted users
-    assert len(users) == 1
+    # 2 permitted
+    assert len(subscription_ids) == 1
     # check user_id
-    assert isinstance(users[0], UUID)
+    assert isinstance(subscription_ids[0], UUID)
     # check the "dummy" column is not present in the columns due to
     # role secutiry on "authenticated" role
     columns_in_output = [x["name"] for x in wal["columns"]]
     for col in ["id", "user_id", "body"]:
         assert col in columns_in_output
     assert "dummy" not in columns_in_output
+
+
+def test_no_subscribers_skipped(sess):
+    """When a WAL record has no subscribers, it is filtered out"""
+    setup_note(sess)
+    sess.execute(
+        text(
+            """
+insert into public.note(user_id, body)
+values (extensions.uuid_generate_v4(), 'take out the trash');
+    """
+        )
+    )
+    sess.commit()
+    rows = sess.execute(QUERY).all()
+    assert len(rows) == 0
 
 
 def test_wal_update(sess):
@@ -292,7 +344,7 @@ def test_wal_update(sess):
     clear_wal(sess)
     sess.execute("update public.note set body = 'new body'")
     sess.commit()
-    raw, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
+    raw, wal, is_rls_enabled, subscription_ids, errors = sess.execute(QUERY).one()
     UpdateWAL.parse_obj(wal)
     assert wal["record"]["id"] == 1
     assert wal["record"]["body"] == "new body"
@@ -302,8 +354,8 @@ def test_wal_update(sess):
     assert "old_body" not in wal["old_record"]
 
     assert is_rls_enabled
-    # 2 permitted users
-    assert len(users) == 1
+    # 2 permitted
+    assert len(subscription_ids) == 1
     # check the "dummy" column is not present in the columns due to
     # role secutiry on "authenticated" role
     columns_in_output = [x["name"] for x in wal["columns"]]
@@ -321,9 +373,10 @@ def test_wal_update_changed_identity(sess):
     clear_wal(sess)
     sess.execute("update public.note set id = 99")
     sess.commit()
-    _, wal, _, _, errors = sess.execute(QUERY).one()
+    _, wal, is_rls_enabled, _, errors = sess.execute(QUERY).one()
     UpdateWAL.parse_obj(wal)
     assert errors == []
+    assert is_rls_enabled
     assert wal["record"]["id"] == 99
     assert wal["record"]["body"] == "some body"
     assert wal["old_record"]["id"] == 1
@@ -337,12 +390,12 @@ def test_wal_delete(sess):
     clear_wal(sess)
     sess.execute("delete from public.note;")
     sess.commit()
-    _, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
+    _, wal, is_rls_enabled, subscription_ids, errors = sess.execute(QUERY).one()
     DeleteWAL.parse_obj(wal)
     assert errors == []
     assert wal["old_record"]["id"] == 1
     assert is_rls_enabled
-    assert len(users) == 2
+    assert len(subscription_ids) == 2
 
 
 def test_error_413_payload_too_large(sess):
@@ -352,12 +405,41 @@ def test_error_413_payload_too_large(sess):
     clear_wal(sess)
     sess.execute("update public.note set body = repeat('a', 5 * 1024 * 1024);")
     sess.commit()
-    _, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
+    _, wal, is_rls_enabled, subscription_ids, errors = sess.execute(QUERY).one()
     UpdateWAL.parse_obj(wal)
     assert any(["413" in x for x in errors])
-    assert wal["old_record"] == {}
-    assert wal["record"] == {}
-    assert len(users) == 2
+    for key, value in {
+        "type": "UPDATE",
+        "table": "note",
+        "schema": "public",
+        "record": {},
+        "old_record": {},
+    }.items():
+        assert wal[key] == value
+    assert len(subscription_ids) == 2
+    assert not is_rls_enabled
+
+
+def test_no_pkey_returns_error(sess):
+    setup_note(sess)
+    insert_subscriptions(sess, n=1)
+    sess.execute(
+        text(
+            """
+alter table public.note drop constraint note_pkey;
+    """
+        )
+    )
+    sess.commit()
+    clear_wal(sess)
+    insert_notes(sess)
+    sess.commit()
+    _, wal, is_rls_enabled, subscription_ids, errors = sess.execute(QUERY).one()
+    assert wal == {"type": "INSERT", "table": "note", "schema": "public"}
+    assert len(errors) == 1
+    assert errors[0] == "Error 400: Bad Request, no primary key"
+    assert not is_rls_enabled
+    assert len(subscription_ids) == 1
 
 
 @pytest.mark.parametrize(
@@ -390,122 +472,25 @@ def test_user_defined_eq_filter(filter_str, is_true, sess):
     # Test does not match
     sess.execute(
         f"""
-insert into realtime.subscription(user_id, entity, filters)
+insert into realtime.subscription(subscription_id, entity, filters, claims)
 select
     extensions.uuid_generate_v4(),
     'public.note',
-    array[{filter_str}]::realtime.user_defined_filter[];
+    array[{filter_str}]::realtime.user_defined_filter[],
+    jsonb_build_object(
+        'role', 'authenticated',
+        'sub', extensions.uuid_generate_v4()::text
+    );
     """
     )
     sess.commit()
     clear_wal(sess)
-
     insert_notes(sess, n=1, body="bbb")
-    raw, wal, is_rls_enabled, users, errors = sess.execute(QUERY).one()
-    assert len(users) == (1 if is_true else 0)
 
-
-@pytest.mark.performance
-@pytest.mark.parametrize("rls_on", [False, True])
-def test_performance_on_n_recs_n_subscribed(sess, rls_on: bool):
-    setup_note(sess)
-    if rls_on:
-        setup_note_rls(sess)
-    clear_wal(sess)
-
-    if not rls_on:
-        with open("perf.tsv", "w") as f:
-            f.write("n_notes\tn_subscriptions\texec_time\trls_on\n")
-
-    for n_subscriptions in [
-        1,
-        2,
-        3,
-        5,
-        10,
-        25,
-        50,
-        100,
-        250,
-        500,
-        1000,
-        2000,
-        5000,
-        10000,
-    ]:
-        insert_subscriptions(sess, n=n_subscriptions)
-        for n_notes in [1, 2, 3, 4, 5]:
-            clear_wal(sess)
-            insert_notes(sess, n=n_notes)
-
-            data = sess.execute(
-                text(
-                    """
-            explain analyze
-            select
-                realtime.apply_rls(data::jsonb)
-            from
-                pg_logical_slot_peek_changes(
-                    'realtime', null, null,
-                    'include-pk', '1',
-                    'include-transaction', 'false',
-                    'format-version', '2',
-                    'filter-tables', 'realtime.*'
-                )
-            """
-                )
-            ).scalar()
-
-            exec_time = float(
-                data[data.find("time=") :].split(" ")[0].split("=")[1].split("..")[1]
-            )
-
-            with open("perf.tsv", "a") as f:
-                f.write(f"{n_notes}\t{n_subscriptions}\t{exec_time}\t{rls_on}\n")
-
-            # Confirm that the data is correct
-            data = sess.execute(QUERY).all()
-            assert len(data) == n_notes
-
-            # Accumulate the visible_to person for each change and confirm it matches
-            # the number of notes
-            all_visible_to = []
-            for (raw, wal, is_rls_enabled, users, errors) in data:
-                for visible_to in users:
-                    all_visible_to.append(visible_to)
-
-            if rls_on:
-                try:
-                    assert (
-                        len(all_visible_to)
-                        == len(set(all_visible_to))
-                        == min(n_notes, n_subscriptions)
-                    )
-                except:
-                    print(
-                        "n_notes",
-                        n_notes,
-                        "n_subscriptions",
-                        n_subscriptions,
-                        all_visible_to,
-                    )
-                    raise
-            else:
-                assert n_subscriptions == len(set(all_visible_to))
-
-            sess.execute(
-                text(
-                    """
-            truncate table public.note;
-            """
-                )
-            )
-            clear_wal(sess)
-
-        sess.execute(
-            text(
-                """
-            truncate table realtime.subscription;
-            """
-            )
-        )
+    if is_true:
+        raw, wal, is_rls_enabled, subscription_ids, errors = sess.execute(QUERY).one()
+        assert len(subscription_ids) == 1
+    else:
+        # should be filtered out to reduce IO
+        row = sess.execute(QUERY).first()
+        assert row is None

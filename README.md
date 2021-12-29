@@ -24,12 +24,15 @@ User subscriptions are managed through a table
 
 ```sql
 create table realtime.subscription (
-    id bigint not null generated always as identity,
-    user_id uuid not null,
+    id bigint generated always as identity primary key,
+    subscription_id uuid not null,
     entity regclass not null,
-    filters realtime.user_defined_filter[],
+    filters realtime.user_defined_filter[] not null default '{}',
+    claims jsonb not null,
+    claims_role regrole not null generated always as (realtime.to_regrole(claims ->> 'role')) stored,
     created_at timestamp not null default timezone('utc', now()),
-    constraint pk_subscription primary key (id)
+
+    unique (subscription_id, entity, filters)
 );
 ```
 where `realtime.user_defined_filter` is
@@ -47,10 +50,10 @@ create type realtime.equality_op as enum(
 );
 ```
 
-For example, to subscribe a user to table named `public.notes` where the `id` is `6`:
+For example, to subscribe to a table named `public.notes` where the `id` is `6` as the `authenticated` role:
 ```sql
-insert into realtime.subscription(user_id, entity, filters)
-values ('832bd278-dac7-4bef-96be-e21c8a0023c4', 'public.notes', array[('id', 'eq', '6')]);
+insert into realtime.subscription(subscription_id, entity, filters, claims)
+values ('832bd278-dac7-4bef-96be-e21c8a0023c4', 'public.notes', array[('id', 'eq', '6')], '{"role", "authenticated"}');
 ```
 
 
@@ -60,7 +63,7 @@ This package exposes 1 public SQL function `realtime.apply_rls(jsonb)`. It proce
 
 - `wal`: (jsonb) The WAL record as JSONB in the form
 - `is_rls_enabled`: (bool) If the entity (table) the WAL record represents has row level security enabled
-- `users`: (uuid[]) An array users who should be notified about the WAL record
+- `subscription_ids`: (uuid[]) An array subscription ids that should be notified about the WAL record
 - `errors`: (text[]) An array of errors
 
 The jsonb WAL record is in the following format for inserts.
@@ -159,15 +162,36 @@ Important Notes:
 
 ## Error States
 
-### Error 401: Unauthorized
-If a WAL record is passed through `realtime.apply_rls` and the `authenticated` role does not have permission to `select` any of the columns in that table, an `Unauthorized` error is returned with no WAL data.
+### Error 400: Bad Request, no primary key
+If a WAL record for a table that does not have a primary key is passed through `realtime.apply_rls`, an error is returned
 
 Ex:
 ```sql
 (
-    null,                            -- wal
-    null,                            -- is_rls_enabled
-    [],                              -- users,
+    {
+        "type": ...,
+        "schema": ...,
+        "table": ...
+    },                               -- wal
+    true,                            -- is_rls_enabled
+    [...],                           -- subscription_ids,
+    array['Error 400: Bad Request, no primary key'] -- errors
+)::realtime.wal_rls;
+```
+
+### Error 401: Unauthorized
+If a WAL record is passed through `realtime.apply_rls` and the subscription's `clams_role` does not have permission to `select` the primary key columns in that table, an `Unauthorized` error is returned with no WAL data.
+
+Ex:
+```sql
+(
+    {
+        "type": ...,
+        "schema": ...,
+        "table": ...
+    },                               -- wal
+    true,                            -- is_rls_enabled
+    [...],                           -- subscription_ids,
     array['Error 401: Unauthorized'] -- errors
 )::realtime.wal_rls;
 ```
@@ -180,7 +204,7 @@ Ex:
 (
     {..., "record": {}, "old_record": {}}, -- wal
     true,                                  -- is_rls_enabled
-    [...],                                 -- users,
+    [...],                                 -- subscription_ids,
     array['Error 413: Payload Too Large']  -- errors
 )::realtime.wal_rls;
 ```
@@ -189,10 +213,10 @@ Ex:
 
 Each WAL record is passed into `realtime.apply_rls(jsonb)` which:
 
-- impersonates each subscribed user by setting `request.jwt.claims` to an object with `sub` (user's id), `email` (user's email), and `role` ('authenticated')
+- impersonates each subscribed user by setting the appropriate role and `request.jwt.claims` that RLS policies depend on
 - queries for the row using its primary key values
 - applies the subscription's filters to check if the WAL record is filtered out
-- filters out all columns that are not visible to the `authenticated` role
+- filters out all columns that are not visible to the user's role
 
 ## Usage
 
@@ -206,12 +230,10 @@ A complete list of config options can be found [here](https://github.com/eulerto
 The stream can be polled with
 
 ```sql
-set search_path = '';
-
 select
     xyz.wal,
     xyz.is_rls_enabled,
-    xyz.users,
+    xyz.subscription_ids,
     xyz.errors
 from
     pg_logical_slot_get_changes(
@@ -228,18 +250,18 @@ from
         select
             x.wal,
             x.is_rls_enabled,
-            x.users,
+            x.subscription_ids,
             x.errors
         from
-            realtime.apply_rls(data::jsonb) x(wal, is_rls_enabled, users, errors)
+            realtime.apply_rls(data::jsonb) x(wal, is_rls_enabled, subcription_ids, errors)
     ) xyz
+where
+    xyz.subscription_ids[1] is not null
 ```
 
 Or, if the stream should be filtered according to a publication:
 
 ```sql
-set search_path = '';
-
 with pub as (
     select
         concat_ws(
@@ -248,53 +270,53 @@ with pub as (
             case when bool_or(pubupdate) then 'update' else null end,
             case when bool_or(pubdelete) then 'delete' else null end
         ) as w2j_actions,
-        string_agg(realtime.quote_wal2json(format('%I.%I', schemaname, tablename)::regclass), ',') w2j_add_tables
+        coalesce(
+            string_agg(
+                realtime.quote_wal2json(format('%I.%I', schemaname, tablename)::regclass),
+                ','
+            ) filter (where ppt.tablename is not null),
+            ''
+        ) w2j_add_tables
     from
         pg_publication pp
-        join pg_publication_tables ppt
+        left join pg_publication_tables ppt
             on pp.pubname = ppt.pubname
     where
         pp.pubname = 'supabase_realtime'
     group by
         pp.pubname
     limit 1
+),
+w2j as (
+    select
+        x.*, pub.w2j_add_tables
+    from
+         pub,
+         pg_logical_slot_get_changes(
+            'realtime', null, null,
+            'include-pk', '1',
+            'include-transaction', 'false',
+            'include-timestamp', 'true',
+            'write-in-chunks', 'true',
+            'format-version', '2',
+            'actions', pub.w2j_actions,
+            'add-tables', pub.w2j_add_tables
+        ) x
 )
 select
     xyz.wal,
     xyz.is_rls_enabled,
-    xyz.users,
+    xyz.subscription_ids,
     xyz.errors
 from
-    pub,
-    lateral (
-          select
-            *
-          from
-             pg_logical_slot_get_changes(
-                'realtime', null, null,
-                'include-pk', '1',
-                'include-transaction', 'false',
-                'include-timestamp', 'true',
-                'write-in-chunks', 'true',
-                'format-version', '2',
-                'actions', coalesce(pub.w2j_actions, ''),
-                'add-tables', pub.w2j_add_tables
-            )
-    ) w2j,
-    lateral (
-        select
-            x.wal,
-            x.is_rls_enabled,
-            x.users,
-            x.errors
-        from
-            realtime.apply_rls(
-                wal := w2j.data::jsonb,
-                max_record_bytes := 1048576
-            ) x(wal, is_rls_enabled, users, errors)
-    ) xyz
+    w2j,
+    realtime.apply_rls(
+        wal := w2j.data::jsonb,
+        max_record_bytes := 1048576
+    ) xyz(wal, is_rls_enabled, subscription_ids, errors)
 where
-    coalesce(pub.w2j_add_tables, '') <> ''
+    w2j.w2j_add_tables <> ''
+    and xyz.subscription_ids[1] is not null
 ```
 
 ## Configuration
@@ -305,7 +327,7 @@ where
 
 Ex:
 ```sql
-realtime.apply_rls(wal := w2j.data::jsonb, max_record_bytes := 1024*1024) x(wal, is_rls_enabled, users, errors)
+realtime.apply_rls(wal := w2j.data::jsonb, max_record_bytes := 1024*1024) x(wal, is_rls_enabled, subscription_ids, errors)
 ```
 
 
