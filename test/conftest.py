@@ -32,7 +32,7 @@ def dockerize_database():
         else:
             raise Exception("Container never became healthy")
         yield
-        # subprocess.call(["docker-compose", "down", "-v"])
+        subprocess.call(["docker-compose", "down", "-v"])
         return
     yield
 
