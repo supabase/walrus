@@ -7,10 +7,10 @@ from pydantic import BaseModel, Extra, Field, validator
 from sqlalchemy import text
 
 
-def validate_iso8601(text: str) -> bool:
+def validate_timestamp(text: str) -> bool:
     """Validates a timestamp string matches iso8601 format"""
     # datetime.datetime.fromisoformat does not handle timezones correctly
-    regex = r"^(-?(?:[1-9][0-9]*)?[0-9]{4})-(1[0-2]|0[1-9])-(3[01]|0[1-9]|[12][0-9])T(2[0-3]|[01][0-9]):([0-5][0-9]):([0-5][0-9])(\.[0-9]+)?(Z|[+-](?:2[0-3]|[01][0-9]):[0-5][0-9])?$"
+    regex = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$"
     match_iso8601 = re.compile(regex).match
     try:
         if match_iso8601(text) is not None:
@@ -30,7 +30,7 @@ class BaseWAL(BaseModel):
 
     @validator("commit_timestamp")
     def validate_commit_timestamp(cls, v):
-        validate_iso8601(v)
+        validate_timestamp(v)
         return v
 
 
