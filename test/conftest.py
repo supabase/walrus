@@ -51,6 +51,8 @@ def sess(engine):
     conn.execute(
         text(
             """
+create type "MyType" as enum('1');
+
 create table public.note(
     id bigserial primary key,
     user_id uuid not null,
@@ -59,7 +61,7 @@ create table public.note(
     arr_int int[] not null default array[1, 2],
 
     -- dummy column with revoked select for "authenticated"
-    dummy text
+    dummy "MyType"
 
 );
 create index ix_note_user_id on public.note (user_id);

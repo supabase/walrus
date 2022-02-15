@@ -13,6 +13,42 @@ create type realtime.equality_op as enum(
 
 create type realtime.action as enum ('INSERT', 'UPDATE', 'DELETE', 'ERROR');
 
+create function realtime.parse_regtype(text)
+    returns regtype
+    immutable
+    language sql
+    /* Types have different quoting requirements than columns and tables
+    that are not correctly handled appropriately by quote_ident/format('%I')
+
+    for example
+        select '1'::int -- valid
+        select '1'::"int" -- invalid
+
+        but
+
+        select '1'::MyType   -- invalid
+        select '1'::"MyType" -- valid
+
+    the typename returned by wal2json is consistently not quoted since version 2.4
+    i.e.:
+        'int' and 'MyType' vs '"int"' and '"MyType"'
+
+    wal2json has a setting to include type oids, but it has no impact on format-version=2
+    https://github.com/eulerto/wal2json/issues/232
+
+    This function first check if the name requires quoting, then casts to regtype.
+    it is known compatible (manually tested) with all regtypes represented in pg_types
+    */
+as $$
+    select
+        case
+            when $1 ~ '^[a-z_][a-z0-9_]*$'     then $1::regtype
+            -- same again but for arrays
+            when $1 ~ '^[a-z_][a-z0-9_]*\[\]$' then $1::regtype
+            else format('%I', $1)::regtype
+        end
+$$;
+
 
 create function realtime.cast(val text, type_ regtype)
     returns jsonb
@@ -22,7 +58,7 @@ as $$
 declare
     res jsonb;
 begin
-    execute format('select to_jsonb(%L::'|| type_::text || ')', val)  into res;
+    execute format('select to_jsonb(cast(%L as %s))', val, type_)  into res;
     return res;
 end
 $$;
@@ -253,7 +289,7 @@ Should the record be visible (true) or filtered out (false) after *filters* are 
             sum(
                 realtime.check_equality_op(
                     op:=f.op,
-                    type_:=col.type::regtype,
+                    type_:=realtime.parse_regtype(col.type),
                     -- cast jsonb to text
                     val_1:=col.value #>> '{}',
                     val_2:=f.value
@@ -327,7 +363,10 @@ begin
             (
                 x->>'name',
                 x->>'type',
-                realtime.cast((x->'value') #>> '{}', (x->>'type')::regtype),
+                realtime.cast(
+                    (x->'value') #>> '{}',
+                    realtime.parse_regtype((x->>'type'))
+                ),
                 (pks ->> 'name') is not null,
                 true
             )::realtime.wal_column
@@ -342,7 +381,10 @@ begin
             (
                 x->>'name',
                 x->>'type',
-                realtime.cast((x->'value') #>> '{}', (x->>'type')::regtype),
+                realtime.cast(
+                    (x->'value') #>> '{}',
+                    realtime.parse_regtype((x->>'type'))
+                ),
                 (pks ->> 'name') is not null,
                 true
             )::realtime.wal_column

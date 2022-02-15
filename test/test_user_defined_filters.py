@@ -40,6 +40,8 @@ from sqlalchemy import func, select
             "b423f213-ac24-402a-95ea-cf1d94d8e9f0",
             False,
         ),
+        # custom quoted type
+        ("eq", "MyType", "1", "1", True),
     ],
 )
 def test_user_defined_eq_filter(op, type_, val_1, val_2, result, sess):
@@ -48,7 +50,7 @@ def test_user_defined_eq_filter(op, type_, val_1, val_2, result, sess):
             [
                 func.realtime.check_equality_op(
                     op,
-                    type_,
+                    func.realtime.parse_regtype(type_),
                     val_1,
                     val_2,
                 )
