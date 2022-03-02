@@ -58,7 +58,7 @@ create table realtime.subscription (
 create index ix_realtime_subscription_entity on realtime.subscription using hash (entity);
 
 
-create function realtime.subscription_check_filters()
+create or replace function realtime.subscription_check_filters()
     returns trigger
     language plpgsql
 as $$
@@ -76,7 +76,12 @@ declare
             information_schema.columns c
         where
             format('%I.%I', c.table_schema, c.table_name)::regclass = new.entity
-            and pg_catalog.has_column_privilege((new.claims ->> 'role'), new.entity, c.column_name, 'SELECT');
+            and pg_catalog.has_column_privilege(
+                (new.claims ->> 'role'),
+                format('%I.%I', c.table_schema, c.table_name)::regclass,
+                c.column_name,
+                'SELECT'
+            );
     filter realtime.user_defined_filter;
     col_type regtype;
 begin
