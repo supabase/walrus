@@ -2,7 +2,9 @@ version: '3'
 services:
   db:
     container_name: walrus_db
-    image: supabase/postgres
+    build:
+      context: .
+      dockerfile: ./dockerfiles/db/Dockerfile
     ports:
       - "5432:5432"
     volumes:

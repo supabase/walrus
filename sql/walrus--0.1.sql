@@ -22,6 +22,7 @@ as $$
 declare
     res jsonb;
 begin
+    --execute format('select to_jsonb(%L::%s)', val, type_::text) into res;
     execute format('select to_jsonb(%L::'|| type_::text || ')', val)  into res;
     return res;
 end
@@ -194,7 +195,8 @@ $$;
 
 create type realtime.wal_column as (
     name text,
-    type text,
+    type_name text,
+    type_oid oid,
     value jsonb,
     is_pkey boolean,
     is_selectable boolean
@@ -258,7 +260,7 @@ Should the record be visible (true) or filtered out (false) after *filters* are 
             sum(
                 realtime.check_equality_op(
                     op:=f.op,
-                    type_:=col.type::regtype,
+                    type_:=col.type_oid::regtype,
                     -- cast jsonb to text
                     val_1:=col.value #>> '{}',
                     val_2:=f.value
@@ -332,7 +334,11 @@ begin
             (
                 x->>'name',
                 x->>'type',
-                realtime.cast((x->'value') #>> '{}', (x->>'type')::regtype),
+                x->>'typeoid',
+                realtime.cast(
+                    (x->'value') #>> '{}',
+                    (x->>'typeoid')::regtype
+                ),
                 (pks ->> 'name') is not null,
                 true
             )::realtime.wal_column
@@ -347,7 +353,11 @@ begin
             (
                 x->>'name',
                 x->>'type',
-                realtime.cast((x->'value') #>> '{}', (x->>'type')::regtype),
+                x->>'typeoid',
+                realtime.cast(
+                    (x->'value') #>> '{}',
+                    (x->>'typeoid')::regtype
+                ),
                 (pks ->> 'name') is not null,
                 true
             )::realtime.wal_column
@@ -364,7 +374,8 @@ begin
             array_agg(
                 (
                     c.name,
-                    c.type,
+                    c.type_name,
+                    c.type_oid,
                     c.value,
                     c.is_pkey,
                     pg_catalog.has_column_privilege(working_role, entity_, c.name, 'SELECT')
@@ -377,7 +388,8 @@ begin
                 array_agg(
                     (
                         c.name,
-                        c.type,
+                        c.type_name,
+                        c.type_oid,
                         c.value,
                         c.is_pkey,
                         pg_catalog.has_column_privilege(working_role, entity_, c.name, 'SELECT')

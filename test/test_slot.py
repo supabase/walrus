@@ -98,6 +98,7 @@ w2j as (
             'realtime', null, null,
             'include-pk', '1',
             'include-transaction', 'false',
+            'include-type-oids', 'true',
             'include-timestamp', 'true',
             'write-in-chunks', 'true',
             'format-version', '2',
