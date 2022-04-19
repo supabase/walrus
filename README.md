@@ -339,13 +339,27 @@ The project is SQL only and can be installed by executing the contents of `sql/w
 
 Requires
 
-- Python 3.6+
-- docker-compose
+- Postgres 13+
+- wal2json >= 53b548a29ebd6119323b6eb2f6013d7c5fe807ec
 
-```shell
-pip install -e .
+On a Mac:
 
-pytest
+Install postgres
+```sh
+brew install postgres
+```
+
+Install wal2json
+```sh
+git clone https://github.com/eulerto/wal2json.git --depth 1 53b548a29ebd6119323b6eb2f6013d7c5fe807ec
+cd wal2json
+make
+make install
+```
+
+Run the tests, from the repo root.
+```sh
+./bin/installcheck
 ```
 
 ## RFC Process
