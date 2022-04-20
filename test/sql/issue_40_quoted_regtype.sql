@@ -12,6 +12,15 @@ create table public.notes(
     primary_color "Color"
 );
 
+
+create policy rls_color_is_red
+on public.notes
+to authenticated
+using (primary_color = 'RED');
+
+alter table public.notes enable row level security;
+
+
 insert into realtime.subscription(subscription_id, entity, claims, filters)
 select
     seed_uuid(1),
