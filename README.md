@@ -351,8 +351,9 @@ brew install postgres
 
 Install wal2json
 ```sh
-git clone https://github.com/eulerto/wal2json.git --depth 1 53b548a29ebd6119323b6eb2f6013d7c5fe807ec
+git clone https://github.com/eulerto/wal2json.git
 cd wal2json
+git reset --hard 53b548a
 make
 make install
 ```
