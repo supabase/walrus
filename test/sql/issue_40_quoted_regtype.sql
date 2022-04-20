@@ -36,4 +36,6 @@ from
    walrus;
 
 
-
+drop table public.notes;
+select pg_drop_replication_slot('realtime');
+truncate table realtime.subscription;
