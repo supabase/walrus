@@ -20,6 +20,9 @@ pub struct WalrusRecord {
     errors: Vec<String>,
 }
 
+/// Write-Ahead-Log Realtime Unified Security (WALRUS) background worker
+/// runs next to a PostgreSQL instance and forwards its Write-Ahead-Log
+/// to external services
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
 struct Args {
