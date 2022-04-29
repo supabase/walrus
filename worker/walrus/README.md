@@ -38,6 +38,12 @@ The `walrus` executable contains embedded migrations from `./migrations` and app
 
 ## Try it Out
 
+
+Requires:
+- rust/cargo
+- docker-compose
+- postgres installed locally (for `pg_recvlogical`)
+
 Clone and Navigate
 ```sh
 git clone https://github.com/supabase/walrus.git
