@@ -453,22 +453,44 @@ begin
             )
             -- Add "record" key for insert and update
             || case
-                when error_record_exceeds_max_size then jsonb_build_object('record', '{}'::jsonb)
                 when action in ('INSERT', 'UPDATE') then
-                    jsonb_build_object(
-                        'record',
-                        (select jsonb_object_agg((c).name, (c).value) from unnest(columns) c where (c).is_selectable)
-                    )
+                    case
+                        when error_record_exceeds_max_size then
+                            jsonb_build_object(
+                                'record',
+                                (
+                                    select jsonb_object_agg((c).name, (c).value)
+                                    from unnest(columns) c
+                                    where (c).is_selectable and (octet_length((c).value::text) <= 64)
+                                )
+                            )
+                        else
+                            jsonb_build_object(
+                                'record',
+                                (select jsonb_object_agg((c).name, (c).value) from unnest(columns) c where (c).is_selectable)
+                            )
+                    end
                 else '{}'::jsonb
             end
             -- Add "old_record" key for update and delete
             || case
-                when error_record_exceeds_max_size then jsonb_build_object('old_record', '{}'::jsonb)
                 when action in ('UPDATE', 'DELETE') then
-                    jsonb_build_object(
-                        'old_record',
-                        (select jsonb_object_agg((c).name, (c).value) from unnest(old_columns) c where (c).is_selectable)
-                    )
+                    case
+                        when error_record_exceeds_max_size then
+                            jsonb_build_object(
+                                'old_record',
+                                (
+                                    select jsonb_object_agg((c).name, (c).value)
+                                    from unnest(old_columns) c
+                                    where (c).is_selectable and (octet_length((c).value::text) <= 64)
+                                )
+                            )
+                        else
+                            jsonb_build_object(
+                                'old_record',
+                                (select jsonb_object_agg((c).name, (c).value) from unnest(old_columns) c where (c).is_selectable)
+                            )
+                    end
                 else '{}'::jsonb
             end;
 
