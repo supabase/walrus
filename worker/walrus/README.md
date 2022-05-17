@@ -19,7 +19,6 @@ OPTIONS:
 
 ## Features
 
-
 ### Realtime (no polling)
 
 The worker wraps [pg_recvlogical](https://www.postgresql.org/docs/current/app-pgrecvlogical.html), a lightweight tool that ships with PostgreSQL, making use of the [streaming replication protocol](https://www.postgresql.org/docs/current/protocol-logical-replication.html#:~:text=The%20logical%20replication%20protocol%20sends,Start%20and%20Stream%20Stop%20messages.) to recieve new WAL messages.
@@ -49,7 +48,7 @@ Clone and Navigate
 git clone https://github.com/supabase/walrus.git
 cd walrus
 git checkout worker
-cd worker/walrus
+cd worker
 ```
 
 Start the DB
@@ -59,6 +58,7 @@ docker-compose up
 
 Run the walrus worker
 ```sh
+cd walrus
 cargo run -- --connection=postgresql://postgres:password@localhost:5501/postgres
 
 # Note: if you have jq installed, the output is more readable with
