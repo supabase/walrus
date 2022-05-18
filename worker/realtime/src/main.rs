@@ -6,7 +6,7 @@ use log::{error, info, warn};
 use serde::Serialize;
 use serde_json;
 use std::str;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::time::{sleep, Duration};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message, WebSocketStream};
 use url;
@@ -134,22 +134,28 @@ async fn read_stdin(tx: futures_channel::mpsc::UnboundedSender<Message>, topic: 
                 match line_opt {
                     Some(line) => {
                         // Parse stdin string as json
-                        let msg_json = serde_json::from_str(&line)
-                            .expect(&format!("failed to parse message '{}'", line));
-
-                        // Repack json contents into a phoenix message
-                        let phoenix_msg = PhoenixMessage {
-                            event: PhoenixMessageEvent::Message,
-                            payload: msg_json,
-                            reference: None,
-                            topic: topic.to_string(),
-                        };
-
-                        // Wrap phoenix message in a websocket message
-                        let msg = Message::Text(serde_json::to_string(&phoenix_msg).unwrap());
-
-                        // push to futures stream
-                        tx.unbounded_send(msg).unwrap();
+                        match serde_json::from_str(&line) {
+                            Ok(msg_json) => {
+                                // Repack json contents into a phoenix message
+                                let phoenix_msg = PhoenixMessage {
+                                    event: PhoenixMessageEvent::Message,
+                                    payload: msg_json,
+                                    reference: None,
+                                    topic: topic.to_string(),
+                                };
+                                // Wrap phoenix message in a websocket message
+                                let msg =
+                                    Message::Text(serde_json::to_string(&phoenix_msg).unwrap());
+                                // push to output stream
+                                tx.unbounded_send(msg).unwrap();
+                            }
+                            Err(err) => {
+                                warn!(
+                                    "Error parsing stdin line to json: error={}, line={}",
+                                    err, line
+                                )
+                            }
+                        }
                     }
                     None => {
                         warn!("Received empty line from stdin");
