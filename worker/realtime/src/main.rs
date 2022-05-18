@@ -1,4 +1,5 @@
 use clap::Parser;
+use env_logger;
 use futures::stream::SplitSink;
 use futures_util::SinkExt;
 use futures_util::{future, pin_mut, StreamExt};
@@ -51,6 +52,9 @@ async fn main() {
     let addr = build_url(&args.url, &args.apikey);
     let url = url::Url::parse(&addr).expect("invalid URL");
 
+    // enable logger
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+
     loop {
         // websocket
         info!("Connecting to websocket");
@@ -64,8 +68,7 @@ async fn main() {
                 sleep(Duration::from_secs(n_seconds)).await;
             }
             Ok((ws_stream, _)) => {
-                println!("WebSocket handshake successful");
-
+                info!("WebSocket handshake successful");
                 let (mut write, read) = ws_stream.split();
 
                 write = join_topic(write, args.topic.to_string()).await;

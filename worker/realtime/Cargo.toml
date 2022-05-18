@@ -19,6 +19,7 @@ url = "2.2.2"
 futures-channel = "0.3.21"
 futures = "0.3.21"
 log = "0.4.17"
+env_logger = "0.9.0"
 
 
 
