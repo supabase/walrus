@@ -1,14 +1,61 @@
-create schema realtime;
-
-create type realtime.equality_op as enum(
-    'eq', 'neq', 'lt', 'lte', 'gt', 'gte'
-);
+create schema if not exists realtime;
 
 
-create type realtime.action as enum ('INSERT', 'UPDATE', 'DELETE', 'ERROR');
+-- Temporary functions to assist with idempotency
+create or replace function realtime.type_exists(schema_name text, type_name text)
+    returns bool
+    language plpgsql
+as $$
+begin
+    begin
+        perform format('%I.%I', schema_name, type_name)::regtype;
+        return true;
+    exception when others then
+        return false;
+    end;
+end
+$$;
+
+create or replace function realtime.table_exists(schema_name text, table_name text)
+    returns bool
+    language plpgsql
+as $$
+begin
+    begin
+        perform format('%I.%I', schema_name, table_name)::regclass;
+        return true;
+    exception when others then
+        return false;
+    end;
+end
+$$;
 
 
-create function realtime.cast(val text, type_ regtype)
+-- realtime.equality_op
+do $$
+    begin
+        if not realtime.type_exists('realtime', 'equality_op') then
+
+            create type realtime.equality_op as enum(
+                'eq', 'neq', 'lt', 'lte', 'gt', 'gte'
+            );
+
+        end if;
+    end
+$$;
+
+-- realtime.action
+do $$
+    begin
+        if not realtime.type_exists('realtime', 'action') then
+
+            create type realtime.action as enum ('INSERT', 'UPDATE', 'DELETE', 'ERROR');
+
+        end if;
+    end
+$$;
+
+create or replace function realtime.cast(val text, type_ regtype)
     returns jsonb
     immutable
     language plpgsql
@@ -22,14 +69,8 @@ end
 $$;
 
 
-create type realtime.user_defined_filter as (
-    column_name text,
-    op realtime.equality_op,
-    value text
-);
 
-
-create function realtime.to_regrole(role_name text)
+create or replace function realtime.to_regrole(role_name text)
     returns regrole
     immutable
     language sql
@@ -37,19 +78,28 @@ create function realtime.to_regrole(role_name text)
 as $$ select role_name::regrole $$;
 
 
-create table realtime.subscription (
-    -- Tracks which subscriptions are active
-    id bigint generated always as identity primary key,
-    subscription_id uuid not null,
-    entity regclass not null,
-    filters realtime.user_defined_filter[] not null default '{}',
-    claims jsonb not null,
-    claims_role regrole not null generated always as (realtime.to_regrole(claims ->> 'role')) stored,
-    created_at timestamp not null default timezone('utc', now()),
+-- realtime.subscription
+do $$
+    begin
+        if not realtime.table_exists('realtime', 'subscription') then
 
-    unique (subscription_id, entity, filters)
-);
-create index ix_realtime_subscription_entity on realtime.subscription using hash (entity);
+            create table realtime.subscription (
+                -- Tracks which subscriptions are active
+                id bigint generated always as identity primary key,
+                subscription_id uuid not null,
+                entity regclass not null,
+                filters realtime.user_defined_filter[] not null default '{}',
+                claims jsonb not null,
+                claims_role regrole not null generated always as (realtime.to_regrole(claims ->> 'role')) stored,
+                created_at timestamp not null default timezone('utc', now()),
+
+                unique (subscription_id, entity, filters)
+            );
+            create index ix_realtime_subscription_entity on realtime.subscription using hash (entity);
+
+        end if;
+    end
+$$;
 
 
 create or replace function realtime.subscription_check_filters()
@@ -110,11 +160,25 @@ begin
 end;
 $$;
 
-create trigger tr_check_filters
-    before insert or update on realtime.subscription
-    for each row
-    execute function realtime.subscription_check_filters();
+-- tr_check_filters on realtime.subscription
+do $$
+    begin
+        if not exists(
+            select 1
+            from pg_trigger
+            where
+                tgrelid = 'realtime.subscription'::regclass::oid
+                and tgname = 'tr_check_filters'
+        ) then
 
+            create trigger tr_check_filters
+                before insert or update on realtime.subscription
+                for each row
+                execute function realtime.subscription_check_filters();
+
+        end if;
+    end
+$$;
 
 create or replace function realtime.quote_wal2json(entity regclass)
     returns text
@@ -186,14 +250,24 @@ end;
 $$;
 
 
-create type realtime.wal_column as (
-    name text,
-    type_name text,
-    type_oid oid,
-    value jsonb,
-    is_pkey boolean,
-    is_selectable boolean
-);
+-- realtime.wal_column
+do $$
+    begin
+        if not realtime.type_exists('realtime', 'wal_column') then
+
+            create type realtime.wal_column as (
+                name text,
+                type_name text,
+                type_oid oid,
+                value jsonb,
+                is_pkey boolean,
+                is_selectable boolean
+            );
+
+        end if;
+    end
+$$;
+
 
 create or replace function realtime.build_prepared_statement_sql(
     prepared_statement_name text,
@@ -229,13 +303,21 @@ Example
         entity
 $$;
 
+-- realtime.wal_rls
+do $$
+    begin
+        if not realtime.type_exists('realtime', 'wal_rls') then
 
-create type realtime.wal_rls as (
-    wal jsonb,
-    is_rls_enabled boolean,
-    subscription_ids uuid[],
-    errors text[]
-);
+            create type realtime.wal_rls as (
+                wal jsonb,
+                is_rls_enabled boolean,
+                subscription_ids uuid[],
+                errors text[]
+            );
+
+        end if;
+    end
+$$;
 
 
 
@@ -522,3 +604,7 @@ begin
     perform set_config('role', null, true);
 end;
 $$;
+
+
+drop function realtime.type_exists;
+drop function realtime.table_exists;

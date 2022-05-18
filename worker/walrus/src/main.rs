@@ -5,12 +5,28 @@ use diesel::*;
 use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
 use serde::Serialize;
 use serde_json;
+use std::error::Error;
 use std::io;
 use std::io::BufRead;
 use std::process::{Command, Stdio};
 use uuid;
 
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./migrations");
+
+fn run_migrations(
+    connection: &mut PgConnection,
+) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
+    sql_query("create schema if not exists realtime")
+        .execute(connection)
+        .expect("failed to create 'realtime' schema");
+
+    sql_query("set search_path='realtime'")
+        .execute(connection)
+        .expect("failed to set search path");
+
+    connection.run_pending_migrations(MIGRATIONS)?;
+    Ok(())
+}
 
 #[derive(Serialize)]
 pub struct WalrusRecord {
@@ -64,8 +80,7 @@ fn main() {
         let conn = &mut PgConnection::establish(&args.connection).unwrap();
 
         // Run any pending migrations
-        conn.run_pending_migrations(MIGRATIONS)
-            .expect("Pending migrations failed to execute");
+        run_migrations(conn).expect("Pending migrations failed to execute");
 
         // Reading from stdin
         let stdin = cmd.stdout.as_mut().unwrap();
