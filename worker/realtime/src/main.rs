@@ -2,10 +2,11 @@ use clap::Parser;
 use futures::stream::SplitSink;
 use futures_util::SinkExt;
 use futures_util::{future, pin_mut, StreamExt};
+use log::{error, info, warn};
 use serde::Serialize;
 use serde_json;
 use std::str;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::time::{sleep, Duration};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message, WebSocketStream};
 use url;
@@ -48,33 +49,48 @@ async fn main() {
     // url
     let args = Args::parse();
     let addr = build_url(&args.url, &args.apikey);
-    let url = url::Url::parse(&addr).unwrap();
+    let url = url::Url::parse(&addr).expect("invalid URL");
 
-    // websocket
-    let (ws_stream, _) = connect_async(url).await.expect("Failed to connect");
-    println!("WebSocket handshake successful");
-    let (mut write, read) = ws_stream.split();
+    loop {
+        // websocket
+        info!("Connecting to websocket");
+        let ws_connection = connect_async(&url).await;
 
-    write = join_topic(write, args.topic.to_string()).await;
+        match ws_connection {
+            Err(msg) => {
+                let n_seconds = 3;
+                error!("Failed to connect to websocket. Error: {}", msg);
+                info!("Attempting websocket reconnect in {} seconds", n_seconds);
+                sleep(Duration::from_secs(n_seconds)).await;
+            }
+            Ok((ws_stream, _)) => {
+                println!("WebSocket handshake successful");
 
-    // Futures channel
-    let (tx, rx) = futures_channel::mpsc::unbounded();
-    let heartbeat_tx = tx.clone();
+                let (mut write, read) = ws_stream.split();
 
-    tokio::spawn(read_stdin(tx, args.topic.to_string()));
-    tokio::spawn(heartbeat(heartbeat_tx, args.topic.to_string()));
+                write = join_topic(write, args.topic.to_string()).await;
 
-    // Map
-    let tx_to_ws = rx.map(Ok).forward(write);
-    let ws_to_stdout = {
-        read.for_each(|message| async {
-            let data = message.unwrap().into_data();
-            tokio::io::stdout().write_all(&data).await.unwrap();
-        })
-    };
+                // Futures channel
+                let (tx, rx) = futures_channel::mpsc::unbounded();
+                let heartbeat_tx = tx.clone();
 
-    pin_mut!(tx_to_ws, ws_to_stdout);
-    future::select(tx_to_ws, ws_to_stdout).await;
+                tokio::spawn(read_stdin(tx, args.topic.to_string()));
+                tokio::spawn(heartbeat(heartbeat_tx, args.topic.to_string()));
+
+                // Map
+                let tx_to_ws = rx.map(Ok).forward(write);
+                let ws_to_stdout = {
+                    read.for_each(|message| async {
+                        let data = message.unwrap().into_data();
+                        tokio::io::stdout().write_all(&data).await.unwrap();
+                    })
+                };
+
+                pin_mut!(tx_to_ws, ws_to_stdout);
+                future::select(tx_to_ws, ws_to_stdout).await;
+            }
+        }
+    }
 }
 
 pub fn build_url(url: &str, apikey: &str) -> String {
@@ -106,39 +122,43 @@ async fn join_topic(
 // Our helper method which will read data from stdin and send it along the
 // sender provided.
 async fn read_stdin(tx: futures_channel::mpsc::UnboundedSender<Message>, topic: String) {
-    let mut stdin = tokio::io::stdin();
+    let stdin = tokio::io::stdin();
+    let buf = BufReader::new(stdin);
+    let mut lines = buf.lines();
+
     loop {
-        let mut buf = vec![0; 61024];
+        let line_res_opt: Result<Option<String>, std::io::Error> = lines.next_line().await;
 
-        // Read stdin
-        let n = match stdin.read(&mut buf).await {
-            Err(_) | Ok(0) => break,
-            Ok(n) => n,
-        };
-        buf.truncate(n);
+        match line_res_opt {
+            Ok(line_opt) => {
+                match line_opt {
+                    Some(line) => {
+                        // Parse stdin string as json
+                        let msg_json = serde_json::from_str(&line)
+                            .expect(&format!("failed to parse message '{}'", line));
 
-        let mut lines = buf.lines();
+                        // Repack json contents into a phoenix message
+                        let phoenix_msg = PhoenixMessage {
+                            event: PhoenixMessageEvent::Message,
+                            payload: msg_json,
+                            reference: None,
+                            topic: topic.to_string(),
+                        };
 
-        while let Some(line) = lines.next_line().await.expect("invalid line") {
-            // Read stdin as string
+                        // Wrap phoenix message in a websocket message
+                        let msg = Message::Text(serde_json::to_string(&phoenix_msg).unwrap());
 
-            // Parse stdin string as json
-            let msg_json =
-                serde_json::from_str(&line).expect(&format!("failed to parse message '{}'", line));
-
-            // Repack json contents into a phoenix message
-            let phoenix_msg = PhoenixMessage {
-                event: PhoenixMessageEvent::Message,
-                payload: msg_json,
-                reference: None,
-                topic: topic.to_string(),
-            };
-
-            // Wrap phoenix message in a websocket message
-            let msg = Message::Text(serde_json::to_string(&phoenix_msg).unwrap());
-
-            // push to futures stream
-            tx.unbounded_send(msg).unwrap();
+                        // push to futures stream
+                        tx.unbounded_send(msg).unwrap();
+                    }
+                    None => {
+                        warn!("Received empty line from stdin");
+                    }
+                }
+            }
+            Err(err) => {
+                error!("Error reading line from stdin: {}", err);
+            }
         }
     }
 }
