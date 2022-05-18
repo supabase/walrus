@@ -3,6 +3,8 @@ use diesel::dsl::sql;
 use diesel::sql_types::*;
 use diesel::*;
 use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
+use env_logger;
+use log::{error, info, warn};
 use serde::Serialize;
 use serde_json;
 use std::error::Error;
@@ -55,14 +57,17 @@ fn main() {
     // Parse command line arguments
     let args = Args::parse();
 
+    // enable logger
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+
     loop {
         match run(&args) {
             Err(err) => {
-                println!("Error: {}", err);
+                warn!("Error: {}", err);
             }
             _ => continue,
         };
-        println!("Stream interrupted. Restarting pg_recvlogical in 5 seconds");
+        info!("Stream interrupted. Restarting pg_recvlogical in 5 seconds");
         sleep(time::Duration::from_secs(5));
     }
 }
@@ -105,7 +110,7 @@ fn run(args: &Args) -> Result<(), String> {
     match cmd {
         Err(err) => Err(format!("{}", err)),
         Ok(mut cmd) => {
-            println!("Connection established");
+            info!("Connection established");
             // Reading from stdin
             let stdin = cmd.stdout.as_mut().unwrap();
             let stdin_reader = io::BufReader::new(stdin);
@@ -151,7 +156,7 @@ fn run(args: &Args) -> Result<(), String> {
                                             match serde_json::to_string(&walrus_rec) {
                                                 Ok(walrus_json) => println!("{}", walrus_json),
                                                 Err(err) => {
-                                                    println!(
+                                                    error!(
                                                         "Failed to serialize walrus result: {}",
                                                         err
                                                     )
@@ -161,15 +166,15 @@ fn run(args: &Args) -> Result<(), String> {
                                     }
                                     Err(err) => {
                                         cmd.kill().unwrap();
-                                        println!("WALRUS Error: {}", err);
+                                        error!("WALRUS Error: {}", err);
                                         return Err("walrus error".to_string());
                                     }
                                 }
                             }
-                            Err(err) => println!("Failed to parse: {}", err),
+                            Err(err) => error!("Failed to parse: {}", err),
                         }
                     }
-                    Err(err) => println!("Error: {}", err),
+                    Err(err) => error!("Error: {}", err),
                 }
             }
             match cmd.wait() {
