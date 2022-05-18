@@ -9,6 +9,8 @@ use std::error::Error;
 use std::io;
 use std::io::BufRead;
 use std::process::{Command, Stdio};
+use std::thread::sleep;
+use std::time;
 use uuid;
 
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./migrations");
@@ -53,7 +55,32 @@ fn main() {
     // Parse command line arguments
     let args = Args::parse();
 
-    let mut cmd = Command::new("pg_recvlogical")
+    loop {
+        match run(&args) {
+            Err(err) => {
+                println!("Error: {}", err);
+            }
+            _ => continue,
+        };
+        println!("Stream interrupted. Restarting pg_recvlogical in 5 seconds");
+        sleep(time::Duration::from_secs(5));
+    }
+}
+
+fn run(args: &Args) -> Result<(), String> {
+    // Connect to Postgres
+    let conn_result = &mut PgConnection::establish(&args.connection);
+
+    let conn = match conn_result {
+        Ok(c) => c,
+        Err(_) => {
+            return Err("failed to make postgres connection".to_string());
+        }
+    };
+    // Run pending migrations
+    run_migrations(conn).expect("Pending migrations failed to execute");
+
+    let cmd = Command::new("pg_recvlogical")
         //&args
         .args(vec![
             "--file=-",
@@ -69,79 +96,86 @@ fn main() {
             "--create-slot",
             "--if-not-exists",
             "--start",
+            "--no-loop",
         ])
         .stdout(Stdio::piped())
-        .spawn()
-        .unwrap();
+        .stderr(Stdio::piped())
+        .spawn();
 
-    {
-        // Connect to Postgres
-        // "postgresql://oliverrice:@localhost:28814/walrus";
-        let conn = &mut PgConnection::establish(&args.connection).unwrap();
+    match cmd {
+        Err(err) => Err(format!("{}", err)),
+        Ok(mut cmd) => {
+            println!("Connection established");
+            // Reading from stdin
+            let stdin = cmd.stdout.as_mut().unwrap();
+            let stdin_reader = io::BufReader::new(stdin);
+            let stdin_lines = stdin_reader.lines();
 
-        // Run any pending migrations
-        run_migrations(conn).expect("Pending migrations failed to execute");
-
-        // Reading from stdin
-        let stdin = cmd.stdout.as_mut().unwrap();
-        let stdin_reader = io::BufReader::new(stdin);
-        let stdin_lines = stdin_reader.lines();
-
-        // Iterate input data
-        for input_line in stdin_lines {
-            match input_line {
-                Ok(line) => {
-                    let result_json_line = serde_json::from_str::<serde_json::Value>(&line);
-                    match result_json_line {
-                        Ok(json_line) => {
-                            let result_wal_rls_rows = sql::<
-                                Record<(
-                                    sql_types::Jsonb,
-                                    sql_types::Bool,
-                                    sql_types::Array<sql_types::Uuid>,
-                                    sql_types::Array<sql_types::Text>,
-                                )>,
-                            >(
-                                "SELECT x from realtime.apply_rls("
-                            )
-                            .bind::<Jsonb, _>(json_line)
-                            .sql(") x")
-                            .get_results::<(
-                                serde_json::Value,
-                                bool,
-                                Vec<uuid::Uuid>,
-                                Vec<String>,
-                            )>(conn);
-                            match result_wal_rls_rows {
-                                Ok(rows) => {
-                                    for row in rows {
-                                        let walrus_rec = WalrusRecord {
-                                            wal: row.0,
-                                            is_rls_enabled: row.1,
-                                            subscription_ids: row.2,
-                                            errors: row.3,
-                                        };
-                                        match serde_json::to_string(&walrus_rec) {
-                                            Ok(walrus_json) => println!("{}", walrus_json),
-                                            Err(err) => {
-                                                println!(
-                                                    "Failed to serialize walrus result: {}",
-                                                    err
-                                                )
+            // Iterate input data
+            for input_line in stdin_lines {
+                match input_line {
+                    Ok(line) => {
+                        let result_json_line = serde_json::from_str::<serde_json::Value>(&line);
+                        match result_json_line {
+                            Ok(json_line) => {
+                                let result_wal_rls_rows =
+                                    sql::<
+                                        Record<(
+                                            sql_types::Jsonb,
+                                            sql_types::Bool,
+                                            sql_types::Array<sql_types::Uuid>,
+                                            sql_types::Array<sql_types::Text>,
+                                        )>,
+                                    >(
+                                        "SELECT x from realtime.apply_rls("
+                                    )
+                                    .bind::<Jsonb, _>(json_line)
+                                    .sql(") x")
+                                    .get_results::<(
+                                        serde_json::Value,
+                                        bool,
+                                        Vec<uuid::Uuid>,
+                                        Vec<String>,
+                                    )>(
+                                        conn
+                                    );
+                                match result_wal_rls_rows {
+                                    Ok(rows) => {
+                                        for row in rows {
+                                            let walrus_rec = WalrusRecord {
+                                                wal: row.0,
+                                                is_rls_enabled: row.1,
+                                                subscription_ids: row.2,
+                                                errors: row.3,
+                                            };
+                                            match serde_json::to_string(&walrus_rec) {
+                                                Ok(walrus_json) => println!("{}", walrus_json),
+                                                Err(err) => {
+                                                    println!(
+                                                        "Failed to serialize walrus result: {}",
+                                                        err
+                                                    )
+                                                }
                                             }
                                         }
                                     }
+                                    Err(err) => {
+                                        cmd.kill().unwrap();
+                                        println!("WALRUS Error: {}", err);
+                                        return Err("walrus error".to_string());
+                                    }
                                 }
-                                Err(err) => println!("WALRUS Error: {}", err),
                             }
+                            Err(err) => println!("Failed to parse: {}", err),
                         }
-                        Err(err) => println!("Failed to parse: {}", err),
                     }
+                    Err(err) => println!("Error: {}", err),
                 }
-                Err(err) => println!("Error: {}", err),
+            }
+            match cmd.wait() {
+                Ok(_) => Ok(()),
+                Err(err) => Err(format!("{}", err)),
             }
         }
     }
-
-    cmd.wait().unwrap();
 }
