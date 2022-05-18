@@ -84,6 +84,7 @@ fn run(args: &Args) -> Result<(), String> {
     };
     // Run pending migrations
     run_migrations(conn).expect("Pending migrations failed to execute");
+    info!("Postgres connection established");
 
     let cmd = Command::new("pg_recvlogical")
         //&args
@@ -110,7 +111,7 @@ fn run(args: &Args) -> Result<(), String> {
     match cmd {
         Err(err) => Err(format!("{}", err)),
         Ok(mut cmd) => {
-            info!("Connection established");
+            info!("pg_recvlogical started");
             // Reading from stdin
             let stdin = cmd.stdout.as_mut().unwrap();
             let stdin_reader = io::BufReader::new(stdin);
