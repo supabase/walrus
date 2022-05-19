@@ -11,12 +11,13 @@ realtime 0.1.0
 reads JSON from stdin and forwards it to supabase realtime
 
 USAGE:
-    realtime [OPTIONS] --apikey <APIKEY>
+    realtime [OPTIONS]
 
 OPTIONS:
-        --apikey <APIKEY>
-    -h, --help               Print help information
-        --topic <TOPIC>      [default: room:test]
-        --url <URL>          [default: wss://sendwal.fly.dev/socket]
-    -V, --version            Print version information
+    -h, --help                       Print help information
+        --header <HEADER>=<VALUE>
+        --topic <TOPIC>              [default: room:test]
+        --url <URL>                  [default: wss://sendwal.fly.dev/socket]
+    -V, --version                    Print version information
+
 ```

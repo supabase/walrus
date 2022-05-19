@@ -33,7 +33,7 @@ cargo run --bin walrus -- \
     --connection=postgresql://postgres:password@localhost:5501/postgres |
 cargo run --bin realtime -- \
     --url=wss://sendwal.fly.dev/socket \
-    --apikey=<apikey>
+    --header=apikey=<apikey>
 ```
 
 Connect to the database at `postgresql://postgres:password@localhost:5501/postgres`
