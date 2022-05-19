@@ -19,11 +19,31 @@ struct Args {
     #[clap(long, default_value = "wss://sendwal.fly.dev/socket")]
     url: String,
 
-    #[clap(long)]
-    apikey: String,
+    #[clap(
+        long,
+        value_name = "HEADER>=<VALUE",
+        parse(try_from_str = parse_header),
+        number_of_values = 1,
+    )]
+    header: Vec<(String, String)>,
 
     #[clap(long, default_value = "room:test")]
     topic: String,
+}
+
+fn parse_header(user_input: &str) -> Result<(String, String), String> {
+    let mut splitter = user_input.splitn(2, "=");
+
+    let key = splitter.next();
+    let val = splitter.next();
+
+    match (key, val) {
+        (Some(k), Some(v)) => Ok((k.to_string(), v.to_string())),
+        _ => Err(format!(
+            "Could not parse header key-value pair: {}",
+            user_input
+        )),
+    }
 }
 
 #[derive(Serialize)]
@@ -49,8 +69,10 @@ struct PhoenixMessage {
 async fn main() {
     // url
     let args = Args::parse();
-    let addr = build_url(&args.url, &args.apikey);
+    let addr = build_url(&args.url, &args.header);
     let url = url::Url::parse(&addr).expect("invalid URL");
+
+    println!("{:?}", args);
 
     // enable logger
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
@@ -96,8 +118,12 @@ async fn main() {
     }
 }
 
-pub fn build_url(url: &str, apikey: &str) -> String {
-    let addr = format!("{}/websocket?vsn={}&apikey={}", url, "1.0.0", apikey);
+pub fn build_url(url: &str, params: &Vec<(String, String)>) -> String {
+    let mut params_uri: String = "".to_owned();
+    for (k, v) in params {
+        params_uri.push_str(&format!("&{}={}", k, v));
+    }
+    let addr = format!("{}/websocket?vsn={}{}", url, "1.0.0", params_uri);
     addr
 }
 
