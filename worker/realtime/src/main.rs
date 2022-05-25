@@ -100,7 +100,7 @@ async fn main() {
                 let heartbeat_tx = tx.clone();
 
                 tokio::spawn(read_stdin(tx, args.topic.to_string()));
-                tokio::spawn(heartbeat(heartbeat_tx, args.topic.to_string()));
+                tokio::spawn(heartbeat(heartbeat_tx));
 
                 // Map
                 let tx_to_ws = rx.map(Ok).forward(write);
@@ -198,7 +198,7 @@ async fn read_stdin(tx: futures_channel::mpsc::UnboundedSender<Message>, topic: 
     }
 }
 
-async fn heartbeat(tx: futures_channel::mpsc::UnboundedSender<Message>, topic: String) {
+async fn heartbeat(tx: futures_channel::mpsc::UnboundedSender<Message>) {
     loop {
         sleep(Duration::from_secs(3)).await;
         let phoenix_msg = PhoenixMessage {
