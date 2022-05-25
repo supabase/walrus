@@ -50,7 +50,7 @@ fn parse_header(user_input: &str) -> Result<(String, String), String> {
 enum PhoenixMessageEvent {
     #[serde(rename(serialize = "phx_join"))]
     Join,
-    #[serde(rename(serialize = "new_msg"))]
+    #[serde(rename(serialize = "changes"))]
     Message,
     #[serde(rename(serialize = "heartbeat"))]
     Heartbeat,
@@ -205,7 +205,7 @@ async fn heartbeat(tx: futures_channel::mpsc::UnboundedSender<Message>, topic: S
             event: PhoenixMessageEvent::Heartbeat,
             payload: serde_json::json!({"msg": "ping"}),
             reference: None,
-            topic: topic.to_string(),
+            topic: "phoenix".to_string(),
         };
         // Wrap phoenix message in a websocket message
         let msg = Message::Text(serde_json::to_string(&phoenix_msg).unwrap());
