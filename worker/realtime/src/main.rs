@@ -7,7 +7,7 @@ use log::{error, info, warn};
 use serde::Serialize;
 use serde_json;
 use std::str;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::time::{sleep, Duration};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message, WebSocketStream};
 use url;
@@ -106,8 +106,19 @@ async fn main() {
                 let tx_to_ws = rx.map(Ok).forward(write);
                 let ws_to_stdout = {
                     read.for_each(|message| async {
-                        let data = message.unwrap().into_data();
-                        tokio::io::stdout().write_all(&data).await.unwrap();
+                        match message {
+                            Ok(msg) => match msg.into_text() {
+                                Ok(msg_text) => info!("{}", msg_text),
+                                Err(err) => error!(
+                                    "Failed to parse message from realtime service: Error: {}",
+                                    err
+                                ),
+                            },
+                            Err(err) => error!(
+                                "Failed to read message from realtime service: Error: {}",
+                                err
+                            ),
+                        };
                     })
                 };
 
