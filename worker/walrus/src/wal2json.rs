@@ -1,3 +1,4 @@
+use chrono;
 use serde::{Deserialize, Serialize};
 use std::*;
 
@@ -26,11 +27,12 @@ pub enum Action {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Record {
-    pub action: String,
+    pub action: Action,
     pub schema: String,
     pub table: String,
     pub pk: Vec<PrimaryKeyRef>,
     pub columns: Vec<Column>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub identity: Option<Vec<Column>>,
+    pub timestamp: String, //chrono::DateTime<chrono::offset::FixedOffset>,
 }

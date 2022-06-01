@@ -1,3 +1,5 @@
+use cached::proc_macro::cached;
+use cached::TimedSizedCache;
 use clap::Parser;
 use diesel::dsl::sql;
 use diesel::sql_types::*;
@@ -7,14 +9,15 @@ use env_logger;
 use log::{error, info, warn};
 use serde::Serialize;
 use serde_json;
+use std::collections::HashMap;
 use std::error::Error;
 use std::io;
 use std::io::BufRead;
 use std::process::{Command, Stdio};
 use std::thread::sleep;
 use std::time;
-use uuid;
 
+mod realtime_fmt;
 mod wal2json;
 
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./migrations");
@@ -84,6 +87,7 @@ fn run(args: &Args) -> Result<(), String> {
             return Err("failed to make postgres connection".to_string());
         }
     };
+
     // Run pending migrations
     run_migrations(conn).expect("Pending migrations failed to execute");
     info!("Postgres connection established");
@@ -123,9 +127,14 @@ fn run(args: &Args) -> Result<(), String> {
             for input_line in stdin_lines {
                 match input_line {
                     Ok(line) => {
+                        println!("{}", line);
                         let result_record = serde_json::from_str::<wal2json::Record>(&line);
                         match result_record {
                             Ok(wal2json_record) => {
+                                // New
+                                let walrus = process_record(&wal2json_record, conn);
+
+                                // Old
                                 let json_line = serde_json::json!(wal2json_record);
 
                                 let result_wal_rls_rows =
@@ -188,4 +197,198 @@ fn run(args: &Args) -> Result<(), String> {
             }
         }
     }
+}
+
+fn process_record(
+    rec: &wal2json::Record,
+    conn: &mut PgConnection,
+) -> Result<realtime_fmt::WALRLS, String> {
+    let is_in_publication = is_in_publication(&rec.schema, &rec.table, "supabase_realtime", conn)?;
+    let is_subscribed_to = is_subscribed_to(&rec.schema, &rec.table, conn)?;
+    let is_rls_enabled = is_rls_enabled(&rec.schema, &rec.table, conn)?;
+    let subscribed_roles = subscribed_roles(&rec.schema, &rec.table, conn)?;
+    let pkey_cols: Vec<&String> = (&rec).pk.iter().map(|x| &x.name).collect();
+
+    println!("Published {}", is_in_publication);
+    println!("Subscribed {}", is_subscribed_to);
+    println!("Secured {}", is_rls_enabled);
+    println!("Subscribed Roles {}", subscribed_roles.join(", "));
+
+    let action = match rec.action {
+        wal2json::Action::I => realtime_fmt::Action::INSERT,
+        wal2json::Action::U => realtime_fmt::Action::UPDATE,
+        wal2json::Action::D => realtime_fmt::Action::DELETE,
+        wal2json::Action::T => realtime_fmt::Action::TRUNCATE,
+    };
+
+    if action != realtime_fmt::Action::DELETE && pkey_cols.len() == 0 {
+        return Ok(realtime_fmt::WALRLS {
+            wal: realtime_fmt::Data {
+                schema: rec.schema.to_string(),
+                table: rec.table.to_string(),
+                r#type: action,
+                commit_timestamp: rec.timestamp.to_string(),
+                columns: vec![],
+                record: HashMap::new(),
+                old_record: None,
+            },
+            is_rls_enabled,
+            subscription_ids: get_subscription_ids(&rec.schema, &rec.table, conn)?,
+            errors: vec!["Error 400: Bad Request, no primary key".to_string()],
+        });
+    }
+
+    for role in &subscribed_roles {
+        let selectable_columns = selectable_columns(&rec.schema, &rec.table, role, conn)?;
+        println!("Selectable Columns {}", selectable_columns.join(", "));
+
+        //let column_data = rec.columns.into_iter().filter(|x| selectable_columns.contains(&x.name)).collect()
+
+        // For user in subscribed users
+        //      // check column permissions
+    }
+
+    Ok(realtime_fmt::WALRLS {
+        wal: realtime_fmt::Data {
+            schema: rec.schema.to_string(),
+            table: rec.table.to_string(),
+            r#type: action,
+            commit_timestamp: rec.timestamp.to_string(),
+            columns: vec![],
+            record: HashMap::new(),
+            old_record: None,
+        },
+        is_rls_enabled,
+        subscription_ids: vec![],
+        errors: vec![],
+    })
+}
+
+pub mod sql_functions {
+    use diesel::sql_types::*;
+    use diesel::*;
+
+    sql_function! {
+        fn is_rls_enabled(schema_name: Text, table_name: Text) -> Bool;
+    }
+
+    sql_function! {
+        fn is_in_publication(schema_name: Text, table_name: Text, publication_name: Text) -> Bool;
+    }
+
+    sql_function! {
+        fn is_subscribed_to(schema_name: Text, table_name: Text) -> Bool;
+    }
+
+    sql_function! {
+        fn subscribed_roles(schema_name: Text, table_name: Text) -> Array<Text>;
+    }
+
+    sql_function! {
+        fn selectable_columns(schema_name: Text, table_name: Text, role_name: Text) -> Array<Text>;
+    }
+
+    sql_function! {
+        fn get_subscription_ids(schema_name: Text, table_name: Text) -> Array<Uuid>;
+    }
+}
+
+#[cached(
+    type = "TimedSizedCache<String, Result<bool, String>>",
+    create = "{ TimedSizedCache::with_size_and_lifespan(250, 1)}",
+    convert = r#"{ format!("{}.{}", schema_name, table_name) }"#,
+    sync_writes = true
+)]
+fn is_rls_enabled(
+    schema_name: &str,
+    table_name: &str,
+    conn: &mut PgConnection,
+) -> Result<bool, String> {
+    select(sql_functions::is_rls_enabled(schema_name, table_name))
+        .first(conn)
+        .map_err(|x| format!("{}", x))
+}
+
+#[cached(
+    type = "TimedSizedCache<String, Result<bool, String>>",
+    create = "{ TimedSizedCache::with_size_and_lifespan(250, 1)}",
+    convert = r#"{ format!("{}.{}-{}", schema_name, table_name, publication_name) }"#,
+    sync_writes = true
+)]
+fn is_in_publication(
+    schema_name: &str,
+    table_name: &str,
+    publication_name: &str,
+    conn: &mut PgConnection,
+) -> Result<bool, String> {
+    select(sql_functions::is_in_publication(
+        schema_name,
+        table_name,
+        publication_name,
+    ))
+    .first(conn)
+    .map_err(|x| format!("{}", x))
+}
+
+#[cached(
+    type = "TimedSizedCache<String, Result<bool, String>>",
+    create = "{ TimedSizedCache::with_size_and_lifespan(250, 1)}",
+    convert = r#"{ format!("{}.{}", schema_name, table_name) }"#,
+    sync_writes = true
+)]
+fn is_subscribed_to(
+    schema_name: &str,
+    table_name: &str,
+    conn: &mut PgConnection,
+) -> Result<bool, String> {
+    select(sql_functions::is_subscribed_to(schema_name, table_name))
+        .first(conn)
+        .map_err(|x| format!("{}", x))
+}
+
+#[cached(
+    type = "TimedSizedCache<String, Result<Vec<String>, String>>",
+    create = "{ TimedSizedCache::with_size_and_lifespan(250, 1)}",
+    convert = r#"{ format!("{}.{}", schema_name, table_name) }"#,
+    sync_writes = true
+)]
+fn subscribed_roles(
+    schema_name: &str,
+    table_name: &str,
+    conn: &mut PgConnection,
+) -> Result<Vec<String>, String> {
+    select(sql_functions::subscribed_roles(schema_name, table_name))
+        .first(conn)
+        .map_err(|x| format!("{}", x))
+}
+
+#[cached(
+    type = "TimedSizedCache<String, Result<Vec<String>, String>>",
+    create = "{ TimedSizedCache::with_size_and_lifespan(250, 1)}",
+    convert = r#"{ format!("{}.{}-{}", schema_name, table_name, role_name) }"#,
+    sync_writes = true
+)]
+fn selectable_columns(
+    schema_name: &str,
+    table_name: &str,
+    role_name: &str,
+    conn: &mut PgConnection,
+) -> Result<Vec<String>, String> {
+    select(sql_functions::selectable_columns(
+        schema_name,
+        table_name,
+        role_name,
+    ))
+    .first(conn)
+    .map_err(|x| format!("{}", x))
+}
+
+fn get_subscription_ids(
+    schema_name: &str,
+    table_name: &str,
+    conn: &mut PgConnection,
+) -> Result<Vec<uuid::Uuid>, String> {
+    select(sql_functions::get_subscription_ids(schema_name, table_name))
+        .first(conn)
+        .map_err(|x| format!("{}", x))
 }
