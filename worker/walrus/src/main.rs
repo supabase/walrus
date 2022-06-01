@@ -15,6 +15,8 @@ use std::thread::sleep;
 use std::time;
 use uuid;
 
+mod wal2json;
+
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./migrations");
 
 fn run_migrations(
@@ -121,9 +123,11 @@ fn run(args: &Args) -> Result<(), String> {
             for input_line in stdin_lines {
                 match input_line {
                     Ok(line) => {
-                        let result_json_line = serde_json::from_str::<serde_json::Value>(&line);
-                        match result_json_line {
-                            Ok(json_line) => {
+                        let result_record = serde_json::from_str::<wal2json::Record>(&line);
+                        match result_record {
+                            Ok(wal2json_record) => {
+                                let json_line = serde_json::json!(wal2json_record);
+
                                 let result_wal_rls_rows =
                                     sql::<
                                         Record<(

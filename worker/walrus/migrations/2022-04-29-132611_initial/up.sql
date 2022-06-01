@@ -44,6 +44,22 @@ do $$
     end
 $$;
 
+-- realtime.user_defined_filter
+do $$
+    begin
+        if not realtime.type_exists('realtime', 'user_defined_filter') then
+
+            create type realtime.user_defined_filter as (
+                column_name text,
+                op realtime.equality_op,
+                value text
+            );
+
+        end if;
+    end
+$$;
+
+
 -- realtime.action
 do $$
     begin
@@ -249,6 +265,7 @@ begin
 end;
 $$;
 
+drop type if exists realtime.wal_column cascade;
 
 -- realtime.wal_column
 do $$
