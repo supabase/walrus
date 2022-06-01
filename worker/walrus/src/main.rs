@@ -127,13 +127,13 @@ fn run(args: &Args) -> Result<(), String> {
             for input_line in stdin_lines {
                 match input_line {
                     Ok(line) => {
-                        println!("{}", line);
                         let result_record = serde_json::from_str::<wal2json::Record>(&line);
                         match result_record {
                             Ok(wal2json_record) => {
                                 // New
-                                let walrus = process_record(&wal2json_record, conn);
+                                let walrus = process_record(&wal2json_record, 1024 * 1024, conn);
 
+                                /*
                                 // Old
                                 let json_line = serde_json::json!(wal2json_record);
 
@@ -158,16 +158,12 @@ fn run(args: &Args) -> Result<(), String> {
                                     )>(
                                         conn
                                     );
-                                match result_wal_rls_rows {
+                                */
+                                //match result_wal_rls_rows {
+                                match walrus {
                                     Ok(rows) => {
                                         for row in rows {
-                                            let walrus_rec = WalrusRecord {
-                                                wal: row.0,
-                                                is_rls_enabled: row.1,
-                                                subscription_ids: row.2,
-                                                errors: row.3,
-                                            };
-                                            match serde_json::to_string(&walrus_rec) {
+                                            match serde_json::to_string(&row) {
                                                 Ok(walrus_json) => println!("{}", walrus_json),
                                                 Err(err) => {
                                                     error!(
@@ -201,19 +197,29 @@ fn run(args: &Args) -> Result<(), String> {
 
 fn process_record(
     rec: &wal2json::Record,
+    max_record_bytes: usize,
     conn: &mut PgConnection,
-) -> Result<realtime_fmt::WALRLS, String> {
+) -> Result<Vec<realtime_fmt::WALRLS>, String> {
     let is_in_publication = is_in_publication(&rec.schema, &rec.table, "supabase_realtime", conn)?;
     let is_subscribed_to = is_subscribed_to(&rec.schema, &rec.table, conn)?;
     let is_rls_enabled = is_rls_enabled(&rec.schema, &rec.table, conn)?;
     let subscribed_roles = subscribed_roles(&rec.schema, &rec.table, conn)?;
+
+    let exceeds_max_size = serde_json::json!(rec).to_string().len() > max_record_bytes;
+
+    //println!("Published {}", is_in_publication);
+    //println!("Subscribed {}", is_subscribed_to);
+    //println!("Secured {}", is_rls_enabled);
+    //println!("Subscribed Roles {}", subscribed_roles.join(", "));
+
+    let mut result = vec![];
+
+    // If the table isn't in the publication or no one is listening, return
+    if !(is_in_publication & is_subscribed_to) {
+        return Ok(vec![]);
+    }
+
     let pkey_cols: Vec<&String> = (&rec).pk.iter().map(|x| &x.name).collect();
-
-    println!("Published {}", is_in_publication);
-    println!("Subscribed {}", is_subscribed_to);
-    println!("Secured {}", is_rls_enabled);
-    println!("Subscribed Roles {}", subscribed_roles.join(", "));
-
     let action = match rec.action {
         wal2json::Action::I => realtime_fmt::Action::INSERT,
         wal2json::Action::U => realtime_fmt::Action::UPDATE,
@@ -221,12 +227,13 @@ fn process_record(
         wal2json::Action::T => realtime_fmt::Action::TRUNCATE,
     };
 
+    // If the table has no primary key, return
     if action != realtime_fmt::Action::DELETE && pkey_cols.len() == 0 {
-        return Ok(realtime_fmt::WALRLS {
+        let r = realtime_fmt::WALRLS {
             wal: realtime_fmt::Data {
                 schema: rec.schema.to_string(),
                 table: rec.table.to_string(),
-                r#type: action,
+                r#type: action.clone(),
                 commit_timestamp: rec.timestamp.to_string(),
                 columns: vec![],
                 record: HashMap::new(),
@@ -235,33 +242,98 @@ fn process_record(
             is_rls_enabled,
             subscription_ids: get_subscription_ids(&rec.schema, &rec.table, conn)?,
             errors: vec!["Error 400: Bad Request, no primary key".to_string()],
-        });
+        };
+        result.push(r);
+        return Ok(result);
     }
 
     for role in &subscribed_roles {
         let selectable_columns = selectable_columns(&rec.schema, &rec.table, role, conn)?;
-        println!("Selectable Columns {}", selectable_columns.join(", "));
 
-        //let column_data = rec.columns.into_iter().filter(|x| selectable_columns.contains(&x.name)).collect()
+        //println!("Selectable Columns {}", selectable_columns.join(", "));
 
-        // For user in subscribed users
-        //      // check column permissions
+        let mut record_elem = HashMap::new();
+        let mut old_record_elem = None;
+        let mut old_record_elem_content = HashMap::new();
+
+        // If the role select any columns in the table, return
+        if action != realtime_fmt::Action::DELETE && selectable_columns.len() == 0 {
+            let r = realtime_fmt::WALRLS {
+                wal: realtime_fmt::Data {
+                    schema: rec.schema.to_string(),
+                    table: rec.table.to_string(),
+                    r#type: action.clone(),
+                    commit_timestamp: rec.timestamp.to_string(),
+                    columns: vec![],
+                    record: HashMap::new(),
+                    old_record: None,
+                },
+                is_rls_enabled,
+                subscription_ids: get_subscription_ids_by_role(
+                    &rec.schema,
+                    &rec.table,
+                    &role,
+                    conn,
+                )?,
+                errors: vec!["Error 401: Unauthorized".to_string()],
+            };
+            result.push(r);
+        } else {
+            if vec![realtime_fmt::Action::INSERT, realtime_fmt::Action::UPDATE].contains(&action) {
+                for col_name in &selectable_columns {
+                    'record: for col in &rec.columns {
+                        if col_name == &col.name {
+                            if !exceeds_max_size || col.value.to_string().len() < 64 {
+                                record_elem.insert(col_name.to_string(), col.value.clone());
+                                break 'record;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if vec![realtime_fmt::Action::UPDATE, realtime_fmt::Action::DELETE].contains(&action) {
+                for col_name in &selectable_columns {
+                    match &rec.identity {
+                        Some(identity) => {
+                            'old_record: for col in identity {
+                                if col_name == &col.name {
+                                    if !exceeds_max_size || col.value.to_string().len() < 64 {
+                                        old_record_elem_content
+                                            .insert(col_name.to_string(), col.value.clone());
+                                        break 'old_record;
+                                    }
+                                }
+                            }
+                        }
+                        None => (),
+                    }
+                }
+                old_record_elem = Some(old_record_elem_content);
+            }
+        }
+
+        // TODO CHECK RLS
+        // TODO FILTERS
+
+        let r = realtime_fmt::WALRLS {
+            wal: realtime_fmt::Data {
+                schema: rec.schema.to_string(),
+                table: rec.table.to_string(),
+                r#type: action.clone(),
+                commit_timestamp: rec.timestamp.to_string(),
+                columns: vec![],
+                record: record_elem,
+                old_record: old_record_elem,
+            },
+            is_rls_enabled,
+            subscription_ids: get_subscription_ids_by_role(&rec.schema, &rec.table, &role, conn)?,
+            errors: vec!["Error 401: Unauthorized".to_string()],
+        };
+        result.push(r);
     }
 
-    Ok(realtime_fmt::WALRLS {
-        wal: realtime_fmt::Data {
-            schema: rec.schema.to_string(),
-            table: rec.table.to_string(),
-            r#type: action,
-            commit_timestamp: rec.timestamp.to_string(),
-            columns: vec![],
-            record: HashMap::new(),
-            old_record: None,
-        },
-        is_rls_enabled,
-        subscription_ids: vec![],
-        errors: vec![],
-    })
+    Ok(result)
 }
 
 pub mod sql_functions {
@@ -291,6 +363,10 @@ pub mod sql_functions {
     sql_function! {
         fn get_subscription_ids(schema_name: Text, table_name: Text) -> Array<Uuid>;
     }
+
+    sql_function! {
+        fn get_subscription_ids_by_role(schema_name: Text, table_name: Text, role_name: Text) -> Array<Uuid>;
+    }
 }
 
 #[cached(
@@ -304,6 +380,7 @@ fn is_rls_enabled(
     table_name: &str,
     conn: &mut PgConnection,
 ) -> Result<bool, String> {
+    println!("IN IS_RLS_ENABLED");
     select(sql_functions::is_rls_enabled(schema_name, table_name))
         .first(conn)
         .map_err(|x| format!("{}", x))
@@ -391,4 +468,19 @@ fn get_subscription_ids(
     select(sql_functions::get_subscription_ids(schema_name, table_name))
         .first(conn)
         .map_err(|x| format!("{}", x))
+}
+
+fn get_subscription_ids_by_role(
+    schema_name: &str,
+    table_name: &str,
+    role_name: &str,
+    conn: &mut PgConnection,
+) -> Result<Vec<uuid::Uuid>, String> {
+    select(sql_functions::get_subscription_ids_by_role(
+        schema_name,
+        table_name,
+        role_name,
+    ))
+    .first(conn)
+    .map_err(|x| format!("{}", x))
 }

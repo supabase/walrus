@@ -82,6 +82,7 @@ as $$
         coalesce(
             array_agg(
                 pa.attname::text
+                order by pa.attnum asc
             ) filter (
                 where pg_catalog.has_column_privilege(
                     $3,
@@ -99,22 +100,41 @@ as $$
     where
         e.oid = format('%I.%I', $1, $2)::regclass
         and pa.attnum > 0
-        and not pa.attisdropped;
+        and not pa.attisdropped
+
 $$;
 
 
 create function realtime.get_subscription_ids(
     schema_name text,
-    table_name text,
+    table_name text
 )
     returns uuid[]
     language sql
 as $$
     select
-        coalesce(array_agg(distinct claims_role), '{}')
+        coalesce(array_agg(subscription_id), '{}')
     from
         realtime.subscription s
     where
         s.entity = format('%I.%I', schema_name, table_name)::regclass
+    limit 1
+$$;
+
+create function realtime.get_subscription_ids_by_role(
+    schema_name text,
+    table_name text,
+    role_name text
+)
+    returns uuid[]
+    language sql
+as $$
+    select
+        coalesce(array_agg(subscription_id), '{}')
+    from
+        realtime.subscription s
+    where
+        s.entity = format('%I.%I', schema_name, table_name)::regclass
+        and claims_role = role_name::regrole
     limit 1
 $$;
