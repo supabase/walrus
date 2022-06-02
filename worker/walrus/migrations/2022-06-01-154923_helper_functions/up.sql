@@ -22,25 +22,6 @@ as $$
         )
 $$;
 
-create function realtime.is_subscribed_to(
-    schema_name text,
-    table_name text
-)
-    returns bool
-    language sql
-as $$
-    select
-        exists(
-            select
-                1
-            from
-                realtime.subscription s
-            where
-                s.entity = format('%I.%I', schema_name, table_name)::regclass
-            limit 1
-        )
-$$;
-
 create function realtime.is_rls_enabled(schema_name text, table_name text)
     returns bool
     language sql
@@ -98,44 +79,62 @@ as $$
 $$;
 
 
-create function realtime.get_subscription_ids(
-    schema_name text,
-    table_name text
-)
-    returns uuid[]
+create function realtime.to_table_name(regclass)
+    returns text
     language sql
-as $$
+    immutable
+as
+$$
+    with x(maybe_quoted_name) as (
+         select
+            coalesce(nullif(split_part($1::text, '.', 2), ''), $1::text)
+    )
     select
-        coalesce(array_agg(subscription_id), '{}')
+        case
+            when x.maybe_quoted_name like '"%"' then substring(
+                x.maybe_quoted_name,
+                2,
+                character_length(x.maybe_quoted_name)-2
+            )
+            else x.maybe_quoted_name
+        end
     from
-        realtime.subscription s
-    where
-        s.entity = format('%I.%I', schema_name, table_name)::regclass
-    limit 1
+        x
 $$;
 
-create function realtime.get_subscription_ids_by_role(
-    schema_name text,
-    table_name text,
-    role_name text
-)
-    returns uuid[]
+create function realtime.to_schema_name(regclass)
+    returns text
     language sql
-as $$
+    immutable
+as
+$$
+    with x(maybe_quoted_name) as (
+         select
+            coalesce(
+                nullif(split_part($1::text, '.', 1), ''),
+                (
+                    select relnamespace::regnamespace::text
+                    from pg_class
+                    where oid = $1
+                    limit 1
+                )
+            )
+    )
     select
-        coalesce(array_agg(subscription_id), '{}')
+        case
+            when maybe_quoted_name like '"%"' then substring(
+                maybe_quoted_name,
+                1,
+                character_length(maybe_quoted_name)-2
+            )
+            else maybe_quoted_name
+        end
     from
-        realtime.subscription s
-    where
-        s.entity = format('%I.%I', schema_name, table_name)::regclass
-        and claims_role = role_name::regrole
-    limit 1
+        x
 $$;
 
 
 create function realtime.get_subscriptions(
-    schema_name text,
-    table_name text
 )
     returns jsonb[]
     language sql
@@ -144,6 +143,8 @@ as $$
         coalesce(
             array_agg(
                 jsonb_build_object(
+                    'schema_name',  realtime.to_schema_name(entity),
+                    'table_name', realtime.to_table_name(entity),
                     'subscription_id', subscription_id,
                     'filters', filters,
                     'claims_role', claims_role
@@ -153,7 +154,5 @@ as $$
         )
     from
         realtime.subscription s
-    where
-        s.entity = format('%I.%I', schema_name, table_name)::regclass
     limit 1
 $$;

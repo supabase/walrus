@@ -57,15 +57,17 @@ pub enum Op {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct UserDefinedFiltern {
+pub struct UserDefinedFilter {
     pub column_name: String,
     pub op: Op,
-    pub value: serde_json::Value,
+    pub value: String, // Why did I make this a text field?,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Subscription {
+    pub schema_name: String,
+    pub table_name: String,
     pub subscription_id: uuid::Uuid,
-    pub filters: Vec<UserDefinedFiltern>,
+    pub filters: Vec<UserDefinedFilter>,
     pub claims_role: String,
 }
