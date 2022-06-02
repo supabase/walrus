@@ -83,15 +83,8 @@ as $$
             array_agg(
                 pa.attname::text
                 order by pa.attnum asc
-            ) filter (
-                where pg_catalog.has_column_privilege(
-                    $3,
-                    format('%I.%I', $1, $2)::regclass,
-                    pa.attname,
-                    'SELECT'
-                )
             ),
-            '{}'
+            array['abc']
         )
     from
         pg_class e
@@ -136,5 +129,31 @@ as $$
     where
         s.entity = format('%I.%I', schema_name, table_name)::regclass
         and claims_role = role_name::regrole
+    limit 1
+$$;
+
+
+create function realtime.get_subscriptions(
+    schema_name text,
+    table_name text
+)
+    returns jsonb[]
+    language sql
+as $$
+    select
+        coalesce(
+            array_agg(
+                jsonb_build_object(
+                    'subscription_id', subscription_id,
+                    'filters', filters,
+                    'claims_role', claims_role
+                )
+            ),
+            '{}'
+        )
+    from
+        realtime.subscription s
+    where
+        s.entity = format('%I.%I', schema_name, table_name)::regclass
     limit 1
 $$;

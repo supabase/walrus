@@ -11,8 +11,7 @@ use serde::Serialize;
 use serde_json;
 use std::collections::HashMap;
 use std::error::Error;
-use std::io;
-use std::io::BufRead;
+use std::io::{self, BufRead, Write};
 use std::process::{Command, Stdio};
 use std::thread::sleep;
 use std::time;
@@ -133,33 +132,6 @@ fn run(args: &Args) -> Result<(), String> {
                                 // New
                                 let walrus = process_record(&wal2json_record, 1024 * 1024, conn);
 
-                                /*
-                                // Old
-                                let json_line = serde_json::json!(wal2json_record);
-
-                                let result_wal_rls_rows =
-                                    sql::<
-                                        Record<(
-                                            sql_types::Jsonb,
-                                            sql_types::Bool,
-                                            sql_types::Array<sql_types::Uuid>,
-                                            sql_types::Array<sql_types::Text>,
-                                        )>,
-                                    >(
-                                        "SELECT x from realtime.apply_rls("
-                                    )
-                                    .bind::<Jsonb, _>(json_line)
-                                    .sql(") x")
-                                    .get_results::<(
-                                        serde_json::Value,
-                                        bool,
-                                        Vec<uuid::Uuid>,
-                                        Vec<String>,
-                                    )>(
-                                        conn
-                                    );
-                                */
-                                //match result_wal_rls_rows {
                                 match walrus {
                                     Ok(rows) => {
                                         for row in rows {
@@ -203,6 +175,9 @@ fn process_record(
     let is_in_publication = is_in_publication(&rec.schema, &rec.table, "supabase_realtime", conn)?;
     let is_subscribed_to = is_subscribed_to(&rec.schema, &rec.table, conn)?;
     let is_rls_enabled = is_rls_enabled(&rec.schema, &rec.table, conn)?;
+
+    let subscriptions = get_subscriptions(&rec.schema, &rec.table, conn)?;
+
     let subscribed_roles = subscribed_roles(&rec.schema, &rec.table, conn)?;
 
     let exceeds_max_size = serde_json::json!(rec).to_string().len() > max_record_bytes;
@@ -212,7 +187,7 @@ fn process_record(
     //println!("Secured {}", is_rls_enabled);
     //println!("Subscribed Roles {}", subscribed_roles.join(", "));
 
-    let mut result = vec![];
+    let mut result: Vec<realtime_fmt::WALRLS> = vec![];
 
     // If the table isn't in the publication or no one is listening, return
     if !(is_in_publication & is_subscribed_to) {
@@ -250,7 +225,16 @@ fn process_record(
     for role in &subscribed_roles {
         let selectable_columns = selectable_columns(&rec.schema, &rec.table, role, conn)?;
 
-        //println!("Selectable Columns {}", selectable_columns.join(", "));
+        let mut columns = vec![];
+
+        for col in &rec.columns {
+            if selectable_columns.contains(&col.name) {
+                columns.push(realtime_fmt::Column {
+                    name: col.name.to_string(),
+                    type_: col.type_.to_string(),
+                })
+            }
+        }
 
         let mut record_elem = HashMap::new();
         let mut old_record_elem = None;
@@ -264,7 +248,7 @@ fn process_record(
                     table: rec.table.to_string(),
                     r#type: action.clone(),
                     commit_timestamp: rec.timestamp.to_string(),
-                    columns: vec![],
+                    columns,
                     record: HashMap::new(),
                     old_record: None,
                 },
@@ -311,26 +295,35 @@ fn process_record(
                 }
                 old_record_elem = Some(old_record_elem_content);
             }
+
+            // TODO FILTERS
+
+            // TODO CHECK RLS
+
+            let r = realtime_fmt::WALRLS {
+                wal: realtime_fmt::Data {
+                    schema: rec.schema.to_string(),
+                    table: rec.table.to_string(),
+                    r#type: action.clone(),
+                    commit_timestamp: rec.timestamp.to_string(),
+                    columns,
+                    record: record_elem,
+                    old_record: old_record_elem,
+                },
+                is_rls_enabled,
+                subscription_ids: get_subscription_ids_by_role(
+                    &rec.schema,
+                    &rec.table,
+                    &role,
+                    conn,
+                )?,
+                errors: match exceeds_max_size {
+                    true => vec!["Error 413: Payload Too Large".to_string()],
+                    false => vec![],
+                },
+            };
+            result.push(r);
         }
-
-        // TODO CHECK RLS
-        // TODO FILTERS
-
-        let r = realtime_fmt::WALRLS {
-            wal: realtime_fmt::Data {
-                schema: rec.schema.to_string(),
-                table: rec.table.to_string(),
-                r#type: action.clone(),
-                commit_timestamp: rec.timestamp.to_string(),
-                columns: vec![],
-                record: record_elem,
-                old_record: old_record_elem,
-            },
-            is_rls_enabled,
-            subscription_ids: get_subscription_ids_by_role(&rec.schema, &rec.table, &role, conn)?,
-            errors: vec!["Error 401: Unauthorized".to_string()],
-        };
-        result.push(r);
     }
 
     Ok(result)
@@ -367,6 +360,10 @@ pub mod sql_functions {
     sql_function! {
         fn get_subscription_ids_by_role(schema_name: Text, table_name: Text, role_name: Text) -> Array<Uuid>;
     }
+
+    sql_function! {
+        fn get_subscriptions(schema_name: Text, table_name: Text) -> Array<Jsonb>;
+    }
 }
 
 #[cached(
@@ -380,7 +377,6 @@ fn is_rls_enabled(
     table_name: &str,
     conn: &mut PgConnection,
 ) -> Result<bool, String> {
-    println!("IN IS_RLS_ENABLED");
     select(sql_functions::is_rls_enabled(schema_name, table_name))
         .first(conn)
         .map_err(|x| format!("{}", x))
@@ -460,6 +456,12 @@ fn selectable_columns(
     .map_err(|x| format!("{}", x))
 }
 
+#[cached(
+    type = "TimedSizedCache<String, Result<Vec<uuid::Uuid>, String>>",
+    create = "{ TimedSizedCache::with_size_and_lifespan(250, 1)}",
+    convert = r#"{ format!("{}.{}", schema_name, table_name) }"#,
+    sync_writes = true
+)]
 fn get_subscription_ids(
     schema_name: &str,
     table_name: &str,
@@ -470,6 +472,12 @@ fn get_subscription_ids(
         .map_err(|x| format!("{}", x))
 }
 
+#[cached(
+    type = "TimedSizedCache<String, Result<Vec<uuid::Uuid>, String>>",
+    create = "{ TimedSizedCache::with_size_and_lifespan(250, 1)}",
+    convert = r#"{ format!("{}.{}-{}", schema_name, table_name, role_name) }"#,
+    sync_writes = true
+)]
 fn get_subscription_ids_by_role(
     schema_name: &str,
     table_name: &str,
@@ -483,4 +491,31 @@ fn get_subscription_ids_by_role(
     ))
     .first(conn)
     .map_err(|x| format!("{}", x))
+}
+
+#[cached(
+    type = "TimedSizedCache<String, Result<Vec<realtime_fmt::Subscription>, String>>",
+    create = "{ TimedSizedCache::with_size_and_lifespan(250, 1)}",
+    convert = r#"{ format!("{}.{}", schema_name, table_name) }"#,
+    sync_writes = true
+)]
+fn get_subscriptions(
+    schema_name: &str,
+    table_name: &str,
+    conn: &mut PgConnection,
+) -> Result<Vec<realtime_fmt::Subscription>, String> {
+    let subs: Vec<serde_json::Value> =
+        select(sql_functions::get_subscriptions(schema_name, table_name))
+            .first(conn)
+            .map_err(|x| format!("{}", x))?;
+
+    let mut res = vec![];
+
+    for sub_json in subs {
+        let sub: realtime_fmt::Subscription =
+            serde_json::from_value(sub_json).map_err(|x| format!("{}", x))?;
+        res.push(sub);
+    }
+
+    Ok(res)
 }

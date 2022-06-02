@@ -5,7 +5,8 @@ use std::*;
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Column {
     pub name: String,
-    pub r#type: String,
+    #[serde(alias = "type")]
+    pub type_: String,
     pub typeoid: i32,
     pub value: serde_json::Value,
 }
@@ -13,7 +14,8 @@ pub struct Column {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct PrimaryKeyRef {
     pub name: String,
-    pub r#type: String,
+    #[serde(alias = "type")]
+    pub type_: String,
     pub typeoid: i32,
 }
 
