@@ -1,0 +1,12 @@
+[package]
+name = "stream_logical"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1" }
+futures = "0.3"
+bytes = "1.0"
+tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
