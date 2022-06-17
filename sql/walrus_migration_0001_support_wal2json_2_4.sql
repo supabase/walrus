@@ -1,250 +1,3 @@
-/*
-    WALRUS:
-        Write Ahead Log Realtime Unified Security
-*/
-
-create schema realtime;
-
-
-create type realtime.equality_op as enum(
-    'eq', 'neq', 'lt', 'lte', 'gt', 'gte'
-);
-
-
-create type realtime.action as enum ('INSERT', 'UPDATE', 'DELETE', 'ERROR');
-
-
-create function realtime.cast(val text, type_ regtype)
-    returns jsonb
-    immutable
-    language plpgsql
-as $$
-declare
-    res jsonb;
-begin
-    execute format('select to_jsonb(%L::'|| type_::text || ')', val)  into res;
-    return res;
-end
-$$;
-
-
-create type realtime.user_defined_filter as (
-    column_name text,
-    op realtime.equality_op,
-    value text
-);
-
-
-create function realtime.to_regrole(role_name text)
-    returns regrole
-    immutable
-    language sql
-    -- required to allow use in generated clause
-as $$ select role_name::regrole $$;
-
-
-create table realtime.subscription (
-    -- Tracks which subscriptions are active
-    id bigint generated always as identity primary key,
-    subscription_id uuid not null,
-    entity regclass not null,
-    filters realtime.user_defined_filter[] not null default '{}',
-    claims jsonb not null,
-    claims_role regrole not null generated always as (realtime.to_regrole(claims ->> 'role')) stored,
-    created_at timestamp not null default timezone('utc', now()),
-
-    unique (subscription_id, entity, filters)
-);
-create index ix_realtime_subscription_entity on realtime.subscription using hash (entity);
-
-
-create or replace function realtime.subscription_check_filters()
-    returns trigger
-    language plpgsql
-as $$
-/*
-Validates that the user defined filters for a subscription:
-- refer to valid columns that the claimed role may access
-- values are coercable to the correct column type
-*/
-declare
-    col_names text[] = coalesce(
-            array_agg(c.column_name order by c.ordinal_position),
-            '{}'::text[]
-        )
-        from
-            information_schema.columns c
-        where
-            format('%I.%I', c.table_schema, c.table_name)::regclass = new.entity
-            and pg_catalog.has_column_privilege(
-                (new.claims ->> 'role'),
-                format('%I.%I', c.table_schema, c.table_name)::regclass,
-                c.column_name,
-                'SELECT'
-            );
-    filter realtime.user_defined_filter;
-    col_type regtype;
-begin
-    for filter in select * from unnest(new.filters) loop
-        -- Filtered column is valid
-        if not filter.column_name = any(col_names) then
-            raise exception 'invalid column for filter %', filter.column_name;
-        end if;
-
-        -- Type is sanitized and safe for string interpolation
-        col_type = (
-            select atttypid::regtype
-            from pg_catalog.pg_attribute
-            where attrelid = new.entity
-                  and attname = filter.column_name
-        );
-        if col_type is null then
-            raise exception 'failed to lookup type for column %', filter.column_name;
-        end if;
-        -- raises an exception if value is not coercable to type
-        perform realtime.cast(filter.value, col_type);
-    end loop;
-
-    -- Apply consistent order to filters so the unique constraint on
-    -- (subscription_id, entity, filters) can't be tricked by a different filter order
-    new.filters = coalesce(
-        array_agg(f order by f.column_name, f.op, f.value),
-        '{}'
-    ) from unnest(new.filters) f;
-
-    return new;
-end;
-$$;
-
-create trigger tr_check_filters
-    before insert or update on realtime.subscription
-    for each row
-    execute function realtime.subscription_check_filters();
-
-
-create or replace function realtime.quote_wal2json(entity regclass)
-    returns text
-    language sql
-    immutable
-    strict
-as $$
-    select
-        (
-            select string_agg('\' || ch,'')
-            from unnest(string_to_array(nsp.nspname::text, null)) with ordinality x(ch, idx)
-            where
-                not (x.idx = 1 and x.ch = '"')
-                and not (
-                    x.idx = array_length(string_to_array(nsp.nspname::text, null), 1)
-                    and x.ch = '"'
-                )
-        )
-        || '.'
-        || (
-            select string_agg('\' || ch,'')
-            from unnest(string_to_array(pc.relname::text, null)) with ordinality x(ch, idx)
-            where
-                not (x.idx = 1 and x.ch = '"')
-                and not (
-                    x.idx = array_length(string_to_array(nsp.nspname::text, null), 1)
-                    and x.ch = '"'
-                )
-        )
-    from
-        pg_class pc
-        join pg_namespace nsp
-            on pc.relnamespace = nsp.oid
-    where
-        pc.oid = entity
-$$;
-
-
-create or replace function realtime.check_equality_op(
-    op realtime.equality_op,
-    type_ regtype,
-    val_1 text,
-    val_2 text
-)
-    returns bool
-    immutable
-    language plpgsql
-as $$
-/*
-Casts *val_1* and *val_2* as type *type_* and check the *op* condition for truthiness
-*/
-declare
-    op_symbol text = (
-        case
-            when op = 'eq' then '='
-            when op = 'neq' then '!='
-            when op = 'lt' then '<'
-            when op = 'lte' then '<='
-            when op = 'gt' then '>'
-            when op = 'gte' then '>='
-            else 'UNKNOWN OP'
-        end
-    );
-    res boolean;
-begin
-    execute format('select %L::'|| type_::text || ' ' || op_symbol || ' %L::'|| type_::text, val_1, val_2) into res;
-    return res;
-end;
-$$;
-
-
-create type realtime.wal_column as (
-    name text,
-    type_name text,
-    type_oid oid,
-    value jsonb,
-    is_pkey boolean,
-    is_selectable boolean
-);
-
-create or replace function realtime.build_prepared_statement_sql(
-    prepared_statement_name text,
-    entity regclass,
-    columns realtime.wal_column[]
-)
-    returns text
-    language sql
-as $$
-/*
-Builds a sql string that, if executed, creates a prepared statement to
-tests retrive a row from *entity* by its primary key columns.
-
-Example
-    select realtime.build_prepared_statement_sql('public.notes', '{"id"}'::text[], '{"bigint"}'::text[])
-*/
-    select
-'prepare ' || prepared_statement_name || ' as
-    select
-        exists(
-            select
-                1
-            from
-                ' || entity || '
-            where
-                ' || string_agg(quote_ident(pkc.name) || '=' || quote_nullable(pkc.value #>> '{}') , ' and ') || '
-        )'
-    from
-        unnest(columns) pkc
-    where
-        pkc.is_pkey
-    group by
-        entity
-$$;
-
-
-create type realtime.wal_rls as (
-    wal jsonb,
-    is_rls_enabled boolean,
-    subscription_ids uuid[],
-    errors text[]
-);
-
-
-
 create or replace function realtime.is_visible_through_filters(columns realtime.wal_column[], filters realtime.user_defined_filter[])
     returns bool
     language sql
@@ -259,7 +12,10 @@ Should the record be visible (true) or filtered out (false) after *filters* are 
             sum(
                 realtime.check_equality_op(
                     op:=f.op,
-                    type_:=col.type_oid::regtype,
+                    type_:=coalesce(
+                        col.type_oid::regtype, -- null when wal2json version <= 2.4
+                        col.type_name::regtype
+                    ),
                     -- cast jsonb to text
                     val_1:=col.value #>> '{}',
                     val_2:=f.value
@@ -336,7 +92,10 @@ begin
                 x->>'typeoid',
                 realtime.cast(
                     (x->'value') #>> '{}',
-                    (x->>'typeoid')::regtype
+                    coalesce(
+                        (x->>'typeoid')::regtype, -- null when wal2json version <= 2.4
+                        (x->>'type')::regtype
+                    )
                 ),
                 (pks ->> 'name') is not null,
                 true
@@ -355,7 +114,10 @@ begin
                 x->>'typeoid',
                 realtime.cast(
                     (x->'value') #>> '{}',
-                    (x->>'typeoid')::regtype
+                    coalesce(
+                        (x->>'typeoid')::regtype, -- null when wal2json version <= 2.4
+                        (x->>'type')::regtype
+                    )
                 ),
                 (pks ->> 'name') is not null,
                 true
