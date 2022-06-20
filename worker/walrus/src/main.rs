@@ -1,49 +1,20 @@
-use cached::proc_macro::cached;
-use cached::{SizedCache, TimedSizedCache};
 use clap::Parser;
-use diesel::dsl::sql;
-use diesel::sql_types::*;
 use diesel::*;
-use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
 use env_logger;
 use itertools::Itertools;
 use log::{error, info, warn};
-use serde::Serialize;
 use serde_json;
 use std::collections::HashMap;
-use std::error::Error;
 use std::io::{self, BufRead, Write};
 use std::process::{Command, Stdio};
 use std::thread::sleep;
 use std::time;
 
+mod migrations;
 mod realtime_fmt;
+mod sql_functions;
 mod wal2json;
-
-pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./migrations");
-
-fn run_migrations(
-    connection: &mut PgConnection,
-) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
-    sql_query("create schema if not exists realtime")
-        .execute(connection)
-        .expect("failed to create 'realtime' schema");
-
-    sql_query("set search_path='realtime'")
-        .execute(connection)
-        .expect("failed to set search path");
-
-    connection.run_pending_migrations(MIGRATIONS)?;
-    Ok(())
-}
-
-#[derive(Serialize)]
-pub struct WalrusRecord {
-    wal: serde_json::Value,
-    is_rls_enabled: bool,
-    subscription_ids: Vec<uuid::Uuid>,
-    errors: Vec<String>,
-}
+mod walrus_fmt;
 
 /// Write-Ahead-Log Realtime Unified Security (WALRUS) background worker
 /// runs next to a PostgreSQL instance and forwards its Write-Ahead-Log
@@ -89,7 +60,7 @@ fn run(args: &Args) -> Result<(), String> {
     };
 
     // Run pending migrations
-    run_migrations(conn).expect("Pending migrations failed to execute");
+    migrations::run_migrations(conn).expect("Pending migrations failed to execute");
     info!("Postgres connection established");
 
     let cmd = Command::new("pg_recvlogical")
@@ -124,7 +95,7 @@ fn run(args: &Args) -> Result<(), String> {
             let stdin_lines = stdin_reader.lines();
 
             // Load initial snapshot of subscriptions
-            let mut subscriptions = get_subscriptions(conn)?;
+            let mut subscriptions = sql_functions::get_subscriptions(conn)?;
 
             // Iterate input data
             for input_line in stdin_lines {
@@ -133,10 +104,13 @@ fn run(args: &Args) -> Result<(), String> {
                         let result_record = serde_json::from_str::<wal2json::Record>(&line);
                         match result_record {
                             Ok(wal2json_record) => {
+                                // Update subscriptions if needed
+                                update_subscriptions(&wal2json_record, &mut subscriptions);
+
                                 // New
                                 let walrus = process_record(
                                     &wal2json_record,
-                                    &mut subscriptions,
+                                    &subscriptions,
                                     1024 * 1024,
                                     conn,
                                 );
@@ -176,17 +150,12 @@ fn run(args: &Args) -> Result<(), String> {
     }
 }
 
-fn process_record(
+/// Checks to see if the new record is a change to realtime.subscriptions
+/// and updates the subscriptions variable if a change is detected
+fn update_subscriptions(
     rec: &wal2json::Record,
     mut subscriptions: &mut Vec<realtime_fmt::Subscription>,
-    max_record_bytes: usize,
-    conn: &mut PgConnection,
-) -> Result<Vec<realtime_fmt::WALRLS>, String> {
-    let is_in_publication = is_in_publication(&rec.schema, &rec.table, "supabase_realtime", conn)?;
-    let is_subscribed_to = subscriptions.len() > 0;
-    let is_rls_enabled = is_rls_enabled(&rec.schema, &rec.table, conn)?;
-    let exceeds_max_size = serde_json::json!(rec).to_string().len() > max_record_bytes;
-
+) -> () {
     // If the record is a new subscription. Handle it and return
     if rec.schema == "realtime" && rec.table == "subscription" {
         //TODO manage the subscriptions vector from the WAL stream
@@ -211,9 +180,28 @@ fn process_record(
                 subscriptions.clear();
             }
         }
-
-        return Ok(vec![]);
     }
+}
+
+fn pkey_cols(rec: &wal2json::Record) -> Vec<&String> {
+    rec.pk.iter().map(|x| &x.name).collect()
+}
+
+fn has_primary_key(rec: &wal2json::Record) -> bool {
+    pkey_cols(rec).len() != 0
+}
+
+fn process_record(
+    rec: &wal2json::Record,
+    subscriptions: &Vec<realtime_fmt::Subscription>,
+    max_record_bytes: usize,
+    conn: &mut PgConnection,
+) -> Result<Vec<realtime_fmt::WALRLS>, String> {
+    let is_in_publication =
+        sql_functions::is_in_publication(&rec.schema, &rec.table, "supabase_realtime", conn)?;
+    let is_subscribed_to = subscriptions.len() > 0;
+    let is_rls_enabled = sql_functions::is_rls_enabled(&rec.schema, &rec.table, conn)?;
+    let exceeds_max_size = serde_json::json!(rec).to_string().len() > max_record_bytes;
 
     let subscribed_roles: Vec<&String> = subscriptions
         .iter()
@@ -221,19 +209,13 @@ fn process_record(
         .unique()
         .collect();
 
-    //println!("Published {}", is_in_publication);
-    //println!("Subscribed {}", is_subscribed_to);
-    //println!("Secured {}", is_rls_enabled);
-    //println!("Subscribed Roles {}", subscribed_roles.join(", "));
-
     let mut result: Vec<realtime_fmt::WALRLS> = vec![];
 
-    // If the table isn't in the publication or no one is listening, return
+    // If the table isn't in the publication or no one is subscribed, do no work
     if !(is_in_publication & is_subscribed_to) {
         return Ok(vec![]);
     }
 
-    let pkey_cols: Vec<&String> = (&rec).pk.iter().map(|x| &x.name).collect();
     let action = match rec.action {
         wal2json::Action::I => realtime_fmt::Action::INSERT,
         wal2json::Action::U => realtime_fmt::Action::UPDATE,
@@ -242,7 +224,7 @@ fn process_record(
     };
 
     // If the table has no primary key, return
-    if action != realtime_fmt::Action::DELETE && pkey_cols.len() == 0 {
+    if action != realtime_fmt::Action::DELETE && !has_primary_key(rec) {
         let r = realtime_fmt::WALRLS {
             wal: realtime_fmt::Data {
                 schema: rec.schema.to_string(),
@@ -265,7 +247,8 @@ fn process_record(
     }
 
     for role in subscribed_roles {
-        let selectable_columns = selectable_columns(&rec.schema, &rec.table, role, conn)?;
+        let selectable_columns =
+            sql_functions::selectable_columns(&rec.schema, &rec.table, role, conn)?;
 
         let role_subscriptions: Vec<&realtime_fmt::Subscription> = subscriptions
             .iter()
@@ -273,22 +256,21 @@ fn process_record(
             .map(|x| x)
             .collect();
 
-        let mut columns = vec![];
-
-        for col in &rec.columns {
-            if selectable_columns.contains(&col.name) {
-                columns.push(realtime_fmt::Column {
-                    name: col.name.to_string(),
-                    type_: col.type_.to_string(),
-                })
-            }
-        }
+        let columns = rec
+            .columns
+            .iter()
+            .filter(|col| selectable_columns.contains(&col.name))
+            .map(|w2j_col| realtime_fmt::Column {
+                name: w2j_col.name.to_string(),
+                type_: w2j_col.type_.to_string(),
+            })
+            .collect();
 
         let mut record_elem = HashMap::new();
         let mut old_record_elem = None;
         let mut old_record_elem_content = HashMap::new();
 
-        // If the role select any columns in the table, return
+        // If the role can not select any columns in the table, return
         if action != realtime_fmt::Action::DELETE && selectable_columns.len() == 0 {
             let r = realtime_fmt::WALRLS {
                 wal: realtime_fmt::Data {
@@ -342,27 +324,74 @@ fn process_record(
                 old_record_elem = Some(old_record_elem_content);
             }
 
-            // FILTERS
-            let mut delegate_to_sql = vec![];
+            let walcols: Vec<walrus_fmt::WALColumn> = rec
+                .columns
+                .iter()
+                .map(|col| {
+                    walrus_fmt::WALColumn {
+                        name: col.name.to_string(),
+                        type_name: col.type_.to_string(),
+                        type_oid: col.typeoid.clone(),
+                        value: col.value.clone(),
+                        is_pkey: pkey_cols(rec).contains(&&col.name),
+                        is_selectable: false, // stub: unused,
+                    }
+                })
+                .collect();
 
+            // User Defined Filters
             let mut subscription_id_is_visible_through_filters = vec![];
+
             for sub in role_subscriptions {
                 match visible_through_filters(&sub.filters, &rec.columns) {
                     Ok(true) => {
                         subscription_id_is_visible_through_filters.push(sub.subscription_id)
                     }
                     Ok(false) => (),
-                    // TODO: delegate to SQL when we can't handle the comparison in rust
+                    // delegate to SQL when we can't handle the comparison in rust
                     Err(_) => {
-                        delegate_to_sql.push(sub.subscription_id);
+                        match sql_functions::is_visible_through_filters(
+                            &walcols,
+                            &sub.filters,
+                            conn,
+                        ) {
+                            Ok(true) => {
+                                subscription_id_is_visible_through_filters.push(sub.subscription_id)
+                            }
+                            Ok(false) => (),
+                            Err(_) => {
+                                panic!("error from sql during filter");
+                            }
+                        };
                     }
                 }
             }
 
-            // TODO CHECK RLS
-            if is_rls_enabled {
-                panic!("RLS tables not yet implemented");
-            }
+            println!("past filters");
+
+            // Row Level Security
+            let subscription_ids_to_notify = match is_rls_enabled
+                && subscription_id_is_visible_through_filters.len() > 0
+                && !vec![realtime_fmt::Action::DELETE, realtime_fmt::Action::TRUNCATE]
+                    .contains(&action)
+            {
+                false => subscription_id_is_visible_through_filters,
+                true => {
+                    match sql_functions::is_visible_through_rls(
+                        &rec.schema,
+                        &rec.table,
+                        &walcols,
+                        &subscription_id_is_visible_through_filters,
+                        conn,
+                    ) {
+                        Ok(sub_ids) => sub_ids,
+                        Err(err) => {
+                            println!("error from sql during RLS {}", err);
+                            panic!("rls");
+                        }
+                    }
+                }
+            };
 
             let r = realtime_fmt::WALRLS {
                 wal: realtime_fmt::Data {
@@ -375,9 +404,7 @@ fn process_record(
                     old_record: old_record_elem,
                 },
                 is_rls_enabled,
-                // TODO  should be the intersection of visible through filters and RLS (if
-                // applicable)
-                subscription_ids: subscription_id_is_visible_through_filters,
+                subscription_ids: subscription_ids_to_notify,
                 errors: match exceeds_max_size {
                     true => vec!["Error 413: Payload Too Large".to_string()],
                     false => vec![],
@@ -390,26 +417,46 @@ fn process_record(
     Ok(result)
 }
 
+fn is_null(v: &serde_json::Value) -> bool {
+    v == &serde_json::Value::Null
+}
+
 fn visible_through_filters(
     filters: &Vec<realtime_fmt::UserDefinedFilter>,
     columns: &Vec<wal2json::Column>,
 ) -> Result<bool, String> {
+    use crate::realtime_fmt::Op;
+
     for filter in filters {
+        let filter_value: serde_json::Value = match serde_json::from_str(&filter.value) {
+            Ok(v) => v,
+            Err(err) => return Err(format!("{}", err)),
+        };
+
         match columns
             .iter()
             .filter(|x| x.name == filter.column_name)
             .next()
         {
             Some(column) => match column.type_.as_ref() {
-                "integer" | "bigint" | "varchar" | "uuid" => match filter.op {
-                    realtime_fmt::Op::Equal => {
-                        match filter.value.to_string() != column.value.to_string() {
-                            true => {
-                                return Ok(false);
-                            }
-                            false => (),
+                "integer" | "bigint" | "character varying" | "text" | "uuid" => match filter.op {
+                    Op::Equal => {
+                        if column.value != filter_value
+                            || !is_null(&filter_value)
+                            || !is_null(&column.value)
+                        {
+                            return Ok(false);
                         }
                     }
+                    Op::NotEqual => {
+                        if column.value == filter_value
+                            || !is_null(&filter_value)
+                            || !is_null(&column.value)
+                        {
+                            return Ok(false);
+                        }
+                    }
+                    // TODO LT, LTE, GT, GTE
                     _ => return Err("Could not handle op. Delegate comparison to SQL".to_string()),
                 },
                 _ => {
@@ -423,99 +470,4 @@ fn visible_through_filters(
         }
     }
     Ok(true)
-}
-
-pub mod sql_functions {
-    use diesel::sql_types::*;
-    use diesel::*;
-
-    sql_function! {
-        fn is_rls_enabled(schema_name: Text, table_name: Text) -> Bool;
-    }
-
-    sql_function! {
-        fn is_in_publication(schema_name: Text, table_name: Text, publication_name: Text) -> Bool;
-    }
-
-    sql_function! {
-        fn selectable_columns(schema_name: Text, table_name: Text, role_name: Text) -> Array<Text>;
-    }
-
-    sql_function! {
-        fn get_subscriptions() -> Array<Jsonb>;
-    }
-}
-
-#[cached(
-    type = "TimedSizedCache<String, Result<bool, String>>",
-    create = "{ TimedSizedCache::with_size_and_lifespan(250, 1)}",
-    convert = r#"{ format!("{}.{}", schema_name, table_name) }"#,
-    sync_writes = true
-)]
-fn is_rls_enabled(
-    schema_name: &str,
-    table_name: &str,
-    conn: &mut PgConnection,
-) -> Result<bool, String> {
-    select(sql_functions::is_rls_enabled(schema_name, table_name))
-        .first(conn)
-        .map_err(|x| format!("{}", x))
-}
-
-#[cached(
-    type = "TimedSizedCache<String, Result<bool, String>>",
-    create = "{ TimedSizedCache::with_size_and_lifespan(250, 1)}",
-    convert = r#"{ format!("{}.{}-{}", schema_name, table_name, publication_name) }"#,
-    sync_writes = true
-)]
-fn is_in_publication(
-    schema_name: &str,
-    table_name: &str,
-    publication_name: &str,
-    conn: &mut PgConnection,
-) -> Result<bool, String> {
-    select(sql_functions::is_in_publication(
-        schema_name,
-        table_name,
-        publication_name,
-    ))
-    .first(conn)
-    .map_err(|x| format!("{}", x))
-}
-
-#[cached(
-    type = "TimedSizedCache<String, Result<Vec<String>, String>>",
-    create = "{ TimedSizedCache::with_size_and_lifespan(500, 1)}",
-    convert = r#"{ format!("{}.{}-{}", schema_name, table_name, role_name) }"#,
-    sync_writes = true
-)]
-fn selectable_columns(
-    schema_name: &str,
-    table_name: &str,
-    role_name: &str,
-    conn: &mut PgConnection,
-) -> Result<Vec<String>, String> {
-    select(sql_functions::selectable_columns(
-        schema_name,
-        table_name,
-        role_name,
-    ))
-    .first(conn)
-    .map_err(|x| format!("{}", x))
-}
-
-fn get_subscriptions(conn: &mut PgConnection) -> Result<Vec<realtime_fmt::Subscription>, String> {
-    let subs: Vec<serde_json::Value> = select(sql_functions::get_subscriptions())
-        .first(conn)
-        .map_err(|x| format!("{}", x))?;
-
-    let mut res = vec![];
-
-    for sub_json in subs {
-        let sub: realtime_fmt::Subscription =
-            serde_json::from_value(sub_json).map_err(|x| format!("{}", x))?;
-        res.push(sub);
-    }
-
-    Ok(res)
 }

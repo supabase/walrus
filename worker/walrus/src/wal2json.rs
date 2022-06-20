@@ -7,7 +7,7 @@ pub struct Column {
     pub name: String,
     #[serde(alias = "type")]
     pub type_: String,
-    pub typeoid: i32,
+    pub typeoid: Option<u32>,
     pub value: serde_json::Value,
 }
 
