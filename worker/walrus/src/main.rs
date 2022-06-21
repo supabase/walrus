@@ -5,11 +5,12 @@ use itertools::Itertools;
 use log::{error, info, warn};
 use serde_json;
 use std::collections::HashMap;
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead};
 use std::process::{Command, Stdio};
 use std::thread::sleep;
 use std::time;
 
+mod filters;
 mod migrations;
 mod realtime_fmt;
 mod sql_functions;
@@ -203,8 +204,18 @@ fn process_record(
     let is_rls_enabled = sql_functions::is_rls_enabled(&rec.schema, &rec.table, conn)?;
     let exceeds_max_size = serde_json::json!(rec).to_string().len() > max_record_bytes;
 
-    let subscribed_roles: Vec<&String> = subscriptions
+    // Subscriptions to the current entity
+    let entity_subscriptions: Vec<&realtime_fmt::Subscription> = subscriptions
         .iter()
+        .filter(|x| &x.schema_name == &rec.schema)
+        .filter(|x| &x.table_name == &rec.table)
+        .map(|x| x)
+        .collect();
+
+    let subscribed_roles: Vec<&String> = entity_subscriptions
+        .iter()
+        .filter(|x| &x.schema_name == &rec.schema)
+        .filter(|x| &x.table_name == &rec.table)
         .map(|x| &x.claims_role)
         .unique()
         .collect();
@@ -247,14 +258,15 @@ fn process_record(
     }
 
     for role in subscribed_roles {
-        let selectable_columns =
-            sql_functions::selectable_columns(&rec.schema, &rec.table, role, conn)?;
-
-        let role_subscriptions: Vec<&realtime_fmt::Subscription> = subscriptions
+        // Subscriptions to current entity + role
+        let entity_role_subscriptions: Vec<&realtime_fmt::Subscription> = entity_subscriptions
             .iter()
             .filter(|x| &x.claims_role == role)
-            .map(|x| x)
+            .map(|x| *x)
             .collect();
+
+        let selectable_columns =
+            sql_functions::selectable_columns(&rec.schema, &rec.table, role, conn)?;
 
         let columns = rec
             .columns
@@ -283,7 +295,7 @@ fn process_record(
                     old_record: None,
                 },
                 is_rls_enabled,
-                subscription_ids: role_subscriptions
+                subscription_ids: entity_role_subscriptions
                     .iter()
                     .map(|x| x.subscription_id.clone())
                     .collect(),
@@ -342,8 +354,8 @@ fn process_record(
             // User Defined Filters
             let mut subscription_id_is_visible_through_filters = vec![];
 
-            for sub in role_subscriptions {
-                match visible_through_filters(&sub.filters, &rec.columns) {
+            for sub in entity_role_subscriptions {
+                match filters::visible_through_filters(&sub.filters, &rec.columns) {
                     Ok(true) => {
                         subscription_id_is_visible_through_filters.push(sub.subscription_id)
                     }
@@ -366,8 +378,6 @@ fn process_record(
                     }
                 }
             }
-
-            println!("past filters");
 
             // Row Level Security
             let subscription_ids_to_notify = match is_rls_enabled
@@ -415,59 +425,4 @@ fn process_record(
     }
 
     Ok(result)
-}
-
-fn is_null(v: &serde_json::Value) -> bool {
-    v == &serde_json::Value::Null
-}
-
-fn visible_through_filters(
-    filters: &Vec<realtime_fmt::UserDefinedFilter>,
-    columns: &Vec<wal2json::Column>,
-) -> Result<bool, String> {
-    use crate::realtime_fmt::Op;
-
-    for filter in filters {
-        let filter_value: serde_json::Value = match serde_json::from_str(&filter.value) {
-            Ok(v) => v,
-            Err(err) => return Err(format!("{}", err)),
-        };
-
-        match columns
-            .iter()
-            .filter(|x| x.name == filter.column_name)
-            .next()
-        {
-            Some(column) => match column.type_.as_ref() {
-                "integer" | "bigint" | "character varying" | "text" | "uuid" => match filter.op {
-                    Op::Equal => {
-                        if column.value != filter_value
-                            || !is_null(&filter_value)
-                            || !is_null(&column.value)
-                        {
-                            return Ok(false);
-                        }
-                    }
-                    Op::NotEqual => {
-                        if column.value == filter_value
-                            || !is_null(&filter_value)
-                            || !is_null(&column.value)
-                        {
-                            return Ok(false);
-                        }
-                    }
-                    // TODO LT, LTE, GT, GTE
-                    _ => return Err("Could not handle op. Delegate comparison to SQL".to_string()),
-                },
-                _ => {
-                    return Err(format!(
-                        "Could not handle type {}. Delegate comparison to SQL",
-                        column.type_
-                    ))
-                }
-            },
-            None => return Err("Filtered on non-existent column".to_string()),
-        }
-    }
-    Ok(true)
 }

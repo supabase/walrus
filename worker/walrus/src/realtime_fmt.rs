@@ -40,7 +40,7 @@ pub struct WALRLS {
 }
 
 // Subscriptions
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum Op {
     #[serde(alias = "eq")]
     Equal,

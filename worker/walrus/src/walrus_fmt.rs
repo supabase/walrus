@@ -1,5 +1,5 @@
 use chrono;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 #[derive(Serialize)]
 pub struct WalrusRecord {
