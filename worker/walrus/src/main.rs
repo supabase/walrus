@@ -109,6 +109,7 @@ fn run(args: &Args) -> Result<(), String> {
                                 realtime_fmt::update_subscriptions(
                                     &wal2json_record,
                                     &mut subscriptions,
+                                    conn,
                                 );
 
                                 // New

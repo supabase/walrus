@@ -23,6 +23,10 @@ pub mod sql_functions {
     }
 
     sql_function! {
+        fn get_subscription_by_id(id: BigInt) -> Jsonb;
+    }
+
+    sql_function! {
         fn is_visible_through_filters(columns: Jsonb, filters: Jsonb ) -> Bool
     }
 
@@ -141,4 +145,18 @@ pub fn get_subscriptions(
     }
 
     Ok(res)
+}
+
+pub fn get_subscription_by_id(
+    id: i64,
+    conn: &mut PgConnection,
+) -> Result<crate::realtime_fmt::Subscription, String> {
+    let sub_value: serde_json::Value = select(sql_functions::get_subscription_by_id(id))
+        .first(conn)
+        .map_err(|x| format!("{}", x))?;
+
+    let sub: crate::realtime_fmt::Subscription =
+        serde_json::from_value(sub_value).map_err(|x| format!("{}", x))?;
+
+    Ok(sub)
 }

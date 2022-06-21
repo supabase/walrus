@@ -1,7 +1,7 @@
 use crate::wal2json;
 use chrono;
+use diesel::*;
 use log::error;
-use log::info;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::*;
@@ -68,7 +68,7 @@ pub struct UserDefinedFilter {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Subscription {
-    pub id: u64,
+    pub id: i64,
     pub schema_name: String,
     pub table_name: String,
     pub subscription_id: uuid::Uuid,
@@ -78,124 +78,59 @@ pub struct Subscription {
 
 /// Checks to see if the new record is a change to realtime.subscriptions
 /// and updates the subscriptions variable if a change is detected
-pub fn update_subscriptions(rec: &wal2json::Record, subscriptions: &mut Vec<Subscription>) -> () {
-    fn get_column_value_by_name(
-        columns: &Vec<wal2json::Column>,
-        column_name: &str,
-    ) -> Option<serde_json::Value> {
-        columns
-            .iter()
-            .filter(|x| x.name == column_name)
-            .map(|x| x.value.clone())
-            .next()
-    }
-
-    enum NewOrOld {
-        New,
-        Old,
-    }
-
-    fn wal2json_to_subscription(
-        rec: &wal2json::Record,
-        new_or_old: NewOrOld,
-    ) -> Result<Subscription, String> {
-        let columns = match new_or_old {
-            NewOrOld::New => match &rec.columns {
-                Some(cols) => cols.clone(),
-                None => {
-                    return Err("Failed to parse wal2json record. No columns contents".to_string());
-                }
-            },
-            NewOrOld::Old => match &rec.identity {
-                Some(ident) => ident.clone(),
-                None => {
-                    return Err("Failed to parse wal2json record. No identity contents".to_string());
-                }
-            },
-        };
-
-        let id: u64 = match get_column_value_by_name(&columns, "id") {
-            Some(id_json) => match id_json {
-                serde_json::Value::Number(id_num) => match id_num.as_u64() {
-                    Some(id) => id,
-                    None => {
-                        return Err(format!(
-                            "Invalid id in realtime.subscription. Expected u64: {}",
-                            id_num,
-                        ));
-                    }
-                },
-                _ => {
-                    return Err(format!(
-                        "Invalid id in realtime.subscription. Expected number, got: {}",
-                        id_json
-                    ));
-                }
-            },
-            None => {
-                return Err("No id column found on realtime.subscription".to_string());
-            }
-        };
-
-        let subscription_id = match get_column_value_by_name(&columns, "subscription_id") {
-            Some(uuid_json) => match uuid::Uuid::parse_str(&uuid_json.as_str().unwrap()) {
-                Ok(uuid) => uuid,
-                Err(err) => {
-                    return Err(format!(
-                        "Invalid subscription_id realtime.subscription: {}",
-                        err
-                    ));
-                }
-            },
-            None => {
-                return Err("No subscription_id found on realtime.subscription".to_string());
-            }
-        };
-
-        let filters: Vec<UserDefinedFilter> = match get_column_value_by_name(&columns, "filters") {
-            Some(fs_json) => match serde_json::from_value(fs_json.clone()) {
-                Ok(udfs) => udfs,
-                Err(err) => {
-                    return Err(format!("Invalid filters in realtime.subscription: {}", err));
-                }
-            },
-            None => {
-                return Err("No filters column found on realtime.subscription".to_string());
-            }
-        };
-
-        let claims_role = match get_column_value_by_name(&columns, "claims_role") {
-            Some(role_json) => match role_json {
-                serde_json::Value::String(role_name) => role_name,
-                _ => {
-                    return Err("Invalid claims_role in realtime.subscription".to_string());
-                }
-            },
-            None => {
-                return Err("No claims_role column found on realtime.subscription".to_string());
-            }
-        }
-        .to_string();
-
-        Ok(Subscription {
-            id,
-            schema_name: rec.schema.to_string(),
-            table_name: rec.table.to_string(),
-            subscription_id,
-            filters,
-            claims_role,
-        })
-    }
-
+pub fn update_subscriptions(
+    rec: &wal2json::Record,
+    subscriptions: &mut Vec<Subscription>,
+    conn: &mut PgConnection,
+) -> () {
     // If the record is not a subscription, return
     if rec.schema != "realtime" || rec.table != "subscription" {
         return ();
     }
-    //TODO manage the subscriptions vector from the WAL stream
+
+    if rec.action == wal2json::Action::T {
+        subscriptions.clear();
+        return ();
+    }
+
+    let id: i64 = match rec
+        .columns
+        .as_ref()
+        // Deletes have the id value in the identity field
+        .unwrap_or(rec.identity.as_ref().unwrap_or(&vec![]))
+        .iter()
+        .filter(|x| x.name == "id")
+        .map(|x| x.value.clone())
+        .next()
+    {
+        Some(id_json) => match id_json {
+            serde_json::Value::Number(id_num) => match id_num.as_i64() {
+                Some(id) => id,
+                None => {
+                    error!(
+                        "Invalid id in realtime.subscription. Expected i64, got: {}",
+                        id_num
+                    );
+                    return ();
+                }
+            },
+            _ => {
+                error!(
+                    "Invalid id in realtime.subscription. Expected number, got: {}",
+                    id_json
+                );
+                return ();
+            }
+        },
+        None => {
+            error!("No id column found on realtime.subscription");
+            return ();
+        }
+    };
+
     match rec.action {
         wal2json::Action::I => {
-            info!("SUBSCRIPTION: GOT INSERT");
-            match wal2json_to_subscription(rec, NewOrOld::New) {
+            match crate::sql_functions::get_subscription_by_id(id, conn) {
                 Ok(new_sub) => subscriptions.push(new_sub),
                 Err(err) => error!(
                     "Failed to parse wal2json record to realtime.subscription: {} ",
@@ -204,49 +139,23 @@ pub fn update_subscriptions(rec: &wal2json::Record, subscriptions: &mut Vec<Subs
             };
         }
         wal2json::Action::U => {
-            info!("SUBSCRIPTION: GOT UPDATE");
-            // Delete old sub
-            let old_sub = match wal2json_to_subscription(rec, NewOrOld::New) {
-                Ok(old_sub) => old_sub,
-                Err(err) => {
-                    error!(
-                        "Failed to parse wal2json record to realtime.subscription update new: {} ",
-                        err
-                    );
-                    return ();
-                }
-            };
-            subscriptions.retain_mut(|x| x.id != old_sub.id);
+            // Delete existing sub
+            subscriptions.retain_mut(|x| x.id != id);
 
-            // Add new sub
-            match wal2json_to_subscription(rec, NewOrOld::New) {
+            // Add updated sub
+            match crate::sql_functions::get_subscription_by_id(id, conn) {
                 Ok(new_sub) => subscriptions.push(new_sub),
-                Err(err) => {
-                    error!(
-                        "Failed to parse wal2json record to realtime.subscription update new: {} ",
-                        err
-                    );
-                    return ();
-                }
+                Err(err) => error!(
+                    "Failed to parse wal2json record to realtime.subscription: {} ",
+                    err
+                ),
             };
         }
         wal2json::Action::D => {
-            info!("SUBSCRIPTION: GOT DELETE");
-            let old_sub = match wal2json_to_subscription(rec, NewOrOld::New) {
-                Ok(old_sub) => old_sub,
-                Err(err) => {
-                    error!(
-                        "Failed to parse wal2json record to realtime.subscription update new: {} ",
-                        err
-                    );
-                    return ();
-                }
-            };
-            subscriptions.retain(|x| x.id != old_sub.id);
+            subscriptions.retain(|x| x.id != id);
         }
         wal2json::Action::T => {
-            info!("SUBSCRIPTION: GOT TRUNCATE");
-            subscriptions.clear();
+            // Handled above
         }
-    }
+    };
 }

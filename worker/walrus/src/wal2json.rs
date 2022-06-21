@@ -19,7 +19,7 @@ pub struct PrimaryKeyRef {
     pub typeoid: i32,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum Action {
     I,
     U,
