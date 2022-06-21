@@ -143,10 +143,11 @@ as $$
         coalesce(
             array_agg(
                 jsonb_build_object(
-                    'schema_name',  realtime.to_schema_name(entity),
+                    'id', id,
+                    'schema_name', realtime.to_schema_name(entity),
                     'table_name', realtime.to_table_name(entity),
                     'subscription_id', subscription_id,
-                    'filters', filters,
+                    'filters', to_jsonb(filters),
                     'claims_role', claims_role
                 )
             ),

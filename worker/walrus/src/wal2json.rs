@@ -32,9 +32,9 @@ pub struct Record {
     pub action: Action,
     pub schema: String,
     pub table: String,
-    pub pk: Vec<PrimaryKeyRef>,
-    pub columns: Vec<Column>,
+    pub pk: Option<Vec<PrimaryKeyRef>>,
+    pub columns: Option<Vec<Column>>, // option is for truncate
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub identity: Option<Vec<Column>>,
-    pub timestamp: String, //chrono::DateTime<chrono::offset::FixedOffset>,
+    pub identity: Option<Vec<Column>>, // option is for insert/update
+    pub timestamp: String,            //chrono::DateTime<chrono::offset::FixedOffset>,
 }

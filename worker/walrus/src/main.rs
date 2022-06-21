@@ -75,7 +75,7 @@ fn run(args: &Args) -> Result<(), String> {
             "--option=include-timestamp=true",
             "--option=include-type-oids=true",
             "--option=format-version=2",
-            "--option=actions=insert,update,delete",
+            "--option=actions=insert,update,delete,truncate",
             &format!("--slot={}", args.slot),
             "--create-slot",
             "--if-not-exists",
@@ -106,7 +106,10 @@ fn run(args: &Args) -> Result<(), String> {
                         match result_record {
                             Ok(wal2json_record) => {
                                 // Update subscriptions if needed
-                                update_subscriptions(&wal2json_record, &mut subscriptions);
+                                realtime_fmt::update_subscriptions(
+                                    &wal2json_record,
+                                    &mut subscriptions,
+                                );
 
                                 // New
                                 let walrus = process_record(
@@ -151,41 +154,11 @@ fn run(args: &Args) -> Result<(), String> {
     }
 }
 
-/// Checks to see if the new record is a change to realtime.subscriptions
-/// and updates the subscriptions variable if a change is detected
-fn update_subscriptions(
-    rec: &wal2json::Record,
-    mut subscriptions: &mut Vec<realtime_fmt::Subscription>,
-) -> () {
-    // If the record is a new subscription. Handle it and return
-    if rec.schema == "realtime" && rec.table == "subscription" {
-        //TODO manage the subscriptions vector from the WAL stream
-        match rec.action {
-            wal2json::Action::I => {
-                /*
-
-                realtime_fmt::Subscription{
-                    schema_name: rec.schema.to_string(),
-                    table_name: rec.table_name.to_string(),
-                    subscription_id:
-                    filters:
-                    claims_role:
-                }
-                */
-            }
-            wal2json::Action::U => {
-                panic!("subscriptions should not be updated");
-            }
-            wal2json::Action::D => {}
-            wal2json::Action::T => {
-                subscriptions.clear();
-            }
-        }
-    }
-}
-
 fn pkey_cols(rec: &wal2json::Record) -> Vec<&String> {
-    rec.pk.iter().map(|x| &x.name).collect()
+    match &rec.pk {
+        Some(pkey_refs) => pkey_refs.iter().map(|x| &x.name).collect(),
+        None => vec![],
+    }
 }
 
 fn has_primary_key(rec: &wal2json::Record) -> bool {
@@ -202,6 +175,7 @@ fn process_record(
         sql_functions::is_in_publication(&rec.schema, &rec.table, "supabase_realtime", conn)?;
     let is_subscribed_to = subscriptions.len() > 0;
     let is_rls_enabled = sql_functions::is_rls_enabled(&rec.schema, &rec.table, conn)?;
+
     let exceeds_max_size = serde_json::json!(rec).to_string().len() > max_record_bytes;
 
     // Subscriptions to the current entity
@@ -222,17 +196,17 @@ fn process_record(
 
     let mut result: Vec<realtime_fmt::WALRLS> = vec![];
 
-    // If the table isn't in the publication or no one is subscribed, do no work
-    if !(is_in_publication & is_subscribed_to) {
-        return Ok(vec![]);
-    }
-
     let action = match rec.action {
         wal2json::Action::I => realtime_fmt::Action::INSERT,
         wal2json::Action::U => realtime_fmt::Action::UPDATE,
         wal2json::Action::D => realtime_fmt::Action::DELETE,
         wal2json::Action::T => realtime_fmt::Action::TRUNCATE,
     };
+
+    // If the table isn't in the publication or no one is subscribed, do no work
+    if !(is_in_publication && is_subscribed_to && action != realtime_fmt::Action::TRUNCATE) {
+        return Ok(vec![]);
+    }
 
     // If the table has no primary key, return
     if action != realtime_fmt::Action::DELETE && !has_primary_key(rec) {
@@ -270,6 +244,8 @@ fn process_record(
 
         let columns = rec
             .columns
+            .as_ref()
+            .unwrap_or(&vec![])
             .iter()
             .filter(|col| selectable_columns.contains(&col.name))
             .map(|w2j_col| realtime_fmt::Column {
@@ -305,7 +281,7 @@ fn process_record(
         } else {
             if vec![realtime_fmt::Action::INSERT, realtime_fmt::Action::UPDATE].contains(&action) {
                 for col_name in &selectable_columns {
-                    'record: for col in &rec.columns {
+                    'record: for col in rec.columns.as_ref().unwrap_or(&vec![]) {
                         if col_name == &col.name {
                             if !exceeds_max_size || col.value.to_string().len() < 64 {
                                 record_elem.insert(col_name.to_string(), col.value.clone());
@@ -338,6 +314,8 @@ fn process_record(
 
             let walcols: Vec<walrus_fmt::WALColumn> = rec
                 .columns
+                .as_ref()
+                .unwrap_or(&vec![])
                 .iter()
                 .map(|col| {
                     walrus_fmt::WALColumn {
@@ -355,7 +333,10 @@ fn process_record(
             let mut subscription_id_is_visible_through_filters = vec![];
 
             for sub in entity_role_subscriptions {
-                match filters::visible_through_filters(&sub.filters, &rec.columns) {
+                match filters::visible_through_filters(
+                    &sub.filters,
+                    rec.columns.as_ref().unwrap_or(&vec![]),
+                ) {
                     Ok(true) => {
                         subscription_id_is_visible_through_filters.push(sub.subscription_id)
                     }
