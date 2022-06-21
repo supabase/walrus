@@ -52,7 +52,7 @@ pub fn visible_through_filters(
                 | Op::GreaterThan
                 | Op::GreaterThanOrEqual => {
                     let valid_ops = get_valid_ops(&column.value, &filter_value)?;
-                    if valid_ops.contains(&filter.op) {
+                    if !valid_ops.contains(&filter.op) {
                         return Ok(false);
                     }
                 }
@@ -61,7 +61,7 @@ pub fn visible_through_filters(
             "uuid" => match &filter.op {
                 Op::Equal | Op::NotEqual => {
                     let valid_ops = get_valid_ops(&column.value, &filter_value)?;
-                    if valid_ops.contains(&filter.op) {
+                    if !valid_ops.contains(&filter.op) {
                         return Ok(false);
                     };
                 }
