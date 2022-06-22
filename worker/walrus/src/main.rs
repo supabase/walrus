@@ -106,7 +106,6 @@ fn run(args: &Args) -> Result<(), String> {
             for input_line in stdin_lines {
                 match input_line {
                     Ok(line) => {
-                        println!("{}", line);
                         let result_record = serde_json::from_str::<wal2json::Record>(&line);
                         match result_record {
                             Ok(wal2json_record) => {
