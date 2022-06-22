@@ -177,7 +177,7 @@ fn process_record(
     conn: &mut PgConnection,
 ) -> Result<Vec<realtime_fmt::WALRLS>, String> {
     let is_in_publication =
-        sql_functions::is_in_publication(&rec.schema, &rec.table, "supabase_realtime", conn)?;
+        sql_functions::is_in_publication(&rec.schema, &rec.table, "supabase_multiplayer", conn)?;
     let is_subscribed_to = subscriptions.len() > 0;
     let is_rls_enabled = sql_functions::is_rls_enabled(&rec.schema, &rec.table, conn)?;
 

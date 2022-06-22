@@ -18,7 +18,7 @@ pub enum Action {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Column {
     pub name: String,
-    #[serde(alias = "type")]
+    #[serde(rename(serialize = "type", deserialize = "type"))]
     pub type_: String,
 }
 
