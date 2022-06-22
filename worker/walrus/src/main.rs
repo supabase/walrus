@@ -14,6 +14,7 @@ mod filters;
 mod migrations;
 mod realtime_fmt;
 mod sql_functions;
+mod timestamp_fmt;
 mod wal2json;
 mod walrus_fmt;
 
@@ -36,7 +37,7 @@ fn main() {
 
     // enable logger
     //env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug")).init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     loop {
         match run(&args) {
@@ -105,6 +106,7 @@ fn run(args: &Args) -> Result<(), String> {
             for input_line in stdin_lines {
                 match input_line {
                     Ok(line) => {
+                        println!("{}", line);
                         let result_record = serde_json::from_str::<wal2json::Record>(&line);
                         match result_record {
                             Ok(wal2json_record) => {
@@ -219,7 +221,7 @@ fn process_record(
                 schema: rec.schema.to_string(),
                 table: rec.table.to_string(),
                 r#type: action.clone(),
-                commit_timestamp: rec.timestamp.to_string(),
+                commit_timestamp: rec.timestamp,
                 columns: vec![],
                 record: HashMap::new(),
                 old_record: None,
@@ -269,7 +271,7 @@ fn process_record(
                     schema: rec.schema.to_string(),
                     table: rec.table.to_string(),
                     r#type: action.clone(),
-                    commit_timestamp: rec.timestamp.to_string(),
+                    commit_timestamp: rec.timestamp,
                     columns,
                     record: HashMap::new(),
                     old_record: None,
@@ -343,16 +345,16 @@ fn process_record(
                     rec.columns.as_ref().unwrap_or(&vec![]),
                 ) {
                     Ok(true) => {
-                        debug!("Filters handled in rust: {:?}", &sub.filters);
+                        //debug!("Filters handled in rust: {:?}", &sub.filters);
                         subscription_id_is_visible_through_filters.push(sub.subscription_id);
                     }
                     Ok(false) => (),
                     // delegate to SQL when we can't handle the comparison in rust
                     Err(err) => {
-                        debug!(
-                            "Filters delegated to SQL: {:?}. Error: {}",
-                            &sub.filters, err
-                        );
+                        //debug!(
+                        //    "Filters delegated to SQL: {:?}. Error: {}",
+                        //    &sub.filters, err
+                        //);
                         subscription_id_delegate_to_sql.push(sub.subscription_id);
                     }
                 }
@@ -398,7 +400,7 @@ fn process_record(
                     schema: rec.schema.to_string(),
                     table: rec.table.to_string(),
                     r#type: action.clone(),
-                    commit_timestamp: rec.timestamp.to_string(),
+                    commit_timestamp: rec.timestamp,
                     columns,
                     record: record_elem,
                     old_record: old_record_elem,

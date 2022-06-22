@@ -1,5 +1,5 @@
 use cached::proc_macro::cached;
-use cached::{SizedCache, TimedSizedCache};
+use cached::TimedSizedCache;
 use diesel::*;
 
 pub mod sql_functions {

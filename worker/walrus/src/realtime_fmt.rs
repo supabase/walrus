@@ -1,5 +1,5 @@
 use crate::wal2json;
-use chrono;
+use chrono::{DateTime, Utc};
 use diesel::*;
 use log::error;
 use serde::{Deserialize, Serialize};
@@ -27,8 +27,8 @@ pub struct Data {
     pub schema: String,
     pub table: String,
     pub r#type: Action,
-    // TODO
-    pub commit_timestamp: String, //chrono::DateTime<chrono::Utc>,
+    #[serde(with = "crate::timestamp_fmt")]
+    pub commit_timestamp: DateTime<Utc>,
     pub columns: Vec<Column>,
     pub record: HashMap<String, serde_json::Value>,
     pub old_record: Option<HashMap<String, serde_json::Value>>,

@@ -1,4 +1,4 @@
-use chrono;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::*;
 
@@ -36,5 +36,7 @@ pub struct Record {
     pub columns: Option<Vec<Column>>, // option is for truncate
     #[serde(skip_serializing_if = "Option::is_none")]
     pub identity: Option<Vec<Column>>, // option is for insert/update
-    pub timestamp: String,            //chrono::DateTime<chrono::offset::FixedOffset>,
+    // Example: 2022-06-22 15:38:19.695275+00
+    #[serde(with = "crate::timestamp_fmt")]
+    pub timestamp: DateTime<Utc>,
 }
