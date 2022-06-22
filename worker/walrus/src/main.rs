@@ -2,7 +2,7 @@ use clap::Parser;
 use diesel::*;
 use env_logger;
 use itertools::Itertools;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use serde_json;
 use std::collections::HashMap;
 use std::io::{self, BufRead};
@@ -35,7 +35,8 @@ fn main() {
     let args = Args::parse();
 
     // enable logger
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    //env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug")).init();
 
     loop {
         match run(&args) {
@@ -96,7 +97,9 @@ fn run(args: &Args) -> Result<(), String> {
             let stdin_lines = stdin_reader.lines();
 
             // Load initial snapshot of subscriptions
+            info!("Snapshot of subscriptions loading");
             let mut subscriptions = sql_functions::get_subscriptions(conn)?;
+            info!("Snapshot of subscriptions loaded");
 
             // Iterate input data
             for input_line in stdin_lines {
@@ -332,6 +335,7 @@ fn process_record(
 
             // User Defined Filters
             let mut subscription_id_is_visible_through_filters = vec![];
+            let mut subscription_id_delegate_to_sql = vec![];
 
             for sub in entity_role_subscriptions {
                 match filters::visible_through_filters(
@@ -339,25 +343,29 @@ fn process_record(
                     rec.columns.as_ref().unwrap_or(&vec![]),
                 ) {
                     Ok(true) => {
-                        subscription_id_is_visible_through_filters.push(sub.subscription_id)
+                        debug!("Filters handled in rust: {:?}", &sub.filters);
+                        subscription_id_is_visible_through_filters.push(sub.subscription_id);
                     }
                     Ok(false) => (),
                     // delegate to SQL when we can't handle the comparison in rust
-                    Err(_) => {
-                        match sql_functions::is_visible_through_filters(
-                            &walcols,
-                            &sub.filters,
-                            conn,
-                        ) {
-                            Ok(true) => {
-                                subscription_id_is_visible_through_filters.push(sub.subscription_id)
-                            }
-                            Ok(false) => (),
-                            Err(_) => {
-                                panic!("error from sql during filter");
-                            }
-                        };
+                    Err(err) => {
+                        debug!(
+                            "Filters delegated to SQL: {:?}. Error: {}",
+                            &sub.filters, err
+                        );
+                        subscription_id_delegate_to_sql.push(sub.subscription_id);
                     }
+                }
+            }
+
+            match sql_functions::is_visible_through_filters(
+                &walcols,
+                &subscription_id_delegate_to_sql,
+                conn,
+            ) {
+                Ok(sub_ids) => subscription_id_is_visible_through_filters.extend(&sub_ids),
+                Err(err) => {
+                    error!("Failed to deletegate some filters to SQL: {}", err)
                 }
             }
 
@@ -378,8 +386,8 @@ fn process_record(
                     ) {
                         Ok(sub_ids) => sub_ids,
                         Err(err) => {
-                            println!("error from sql during RLS {}", err);
-                            panic!("rls");
+                            error!("Failed to delegate RLS to SQL: {}", err);
+                            vec![]
                         }
                     }
                 }

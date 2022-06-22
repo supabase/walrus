@@ -27,7 +27,7 @@ pub mod sql_functions {
     }
 
     sql_function! {
-        fn is_visible_through_filters(columns: Jsonb, filters: Jsonb ) -> Bool
+        fn is_visible_through_filters(columns: Jsonb, subscription_ids: Array<Uuid> ) -> Array<Uuid>
     }
 
     sql_function! {
@@ -93,20 +93,15 @@ pub fn selectable_columns(
     .map_err(|x| format!("{}", x))
 }
 
-#[cached(
-    type = "SizedCache<String, Result<bool, String>>",
-    create = "{ SizedCache::with_size(1500)}",
-    convert = r#"{ format!("{:?}-{:?}", columns, filters) }"#,
-    sync_writes = true
-)]
 pub fn is_visible_through_filters(
     columns: &Vec<crate::walrus_fmt::WALColumn>,
-    filters: &Vec<crate::realtime_fmt::UserDefinedFilter>,
+    subscription_ids: &Vec<uuid::Uuid>,
+    // TODO: convert this to use subscription_ids to reduce n calls
     conn: &mut PgConnection,
-) -> Result<bool, String> {
+) -> Result<Vec<uuid::Uuid>, String> {
     select(sql_functions::is_visible_through_filters(
         serde_json::json!(columns),
-        serde_json::json!(filters),
+        subscription_ids,
     ))
     .first(conn)
     .map_err(|x| format!("{}", x))

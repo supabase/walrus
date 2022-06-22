@@ -147,7 +147,7 @@ as $$
                     'schema_name', realtime.to_schema_name(entity),
                     'table_name', realtime.to_table_name(entity),
                     'subscription_id', subscription_id,
-                    'filters', to_jsonb(filters),
+                    'filters', filters,
                     'claims_role', claims_role
                 )
             ),
@@ -168,7 +168,7 @@ as $$
             'schema_name', realtime.to_schema_name(entity),
             'table_name', realtime.to_table_name(entity),
             'subscription_id', subscription_id,
-            'filters', to_jsonb(filters),
+            'filters', filters,
             'claims_role', claims_role
         )
     from
@@ -180,41 +180,57 @@ $$;
 
 create function realtime.is_visible_through_filters(
     columns jsonb,
-    filters jsonb
+    subscription_ids uuid[]
 )
-    returns bool
-    language sql
+    returns uuid[]
+    language plpgsql
 as $$
-    select
-        realtime.is_visible_through_filters(
-            columns := (
-                select
-                    array_agg(
-                        (
-                            c ->> 'name',
-                            c ->> 'type_name',
-                            c ->> 'type_oid',
-                            c ->> 'value',
-                            c ->> 'is_pkey',
-                            c ->> 'is_selectable'
-                        )::realtime.wal_column
-                    )
-                from
-                    jsonb_array_elements(columns) c
-            ),
-            filters := (
-                select
-                    array_agg(
-                        (
-                            f ->> 'column_name',
-                            f ->> 'op',
-                            f ->> 'value'
-                        )::realtime.user_defined_filter
-                    )
-                from
-                    jsonb_array_elements(filters) f
+declare
+    cols realtime.wal_column[];
+    visible_to_subscription_ids uuid[] = '{}';
+    subscription_id uuid;
+    filters realtime.user_defined_filter[];
+    subscription_has_access bool;
+begin
+    cols = (
+        select
+            array_agg(
+                (
+                    c ->> 'name',
+                    c ->> 'type_name',
+                    c ->> 'type_oid',
+                    c -> 'value',
+                    c ->> 'is_pkey',
+                    c ->> 'is_selectable'
+                )::realtime.wal_column
             )
+        from
+            jsonb_array_elements(columns) c
+    );
+
+    for subscription_id, filters in (
+        select
+            subs.subscription_id,
+            subs.filters
+        from
+            realtime.subscription subs
+        where
+            subs.subscription_id = any(subscription_ids)
         )
+    loop
+
+        subscription_has_access = realtime.is_visible_through_filters(
+            columns := cols,
+            filters := filters
+        );
+
+        if subscription_has_access then
+            visible_to_subscription_ids = visible_to_subscription_ids || subscription_id;
+        end if;
+    end loop;
+
+    return visible_to_subscription_ids;
+end;
 $$;
 
 
@@ -235,7 +251,6 @@ declare
     subscription_has_access bool;
     claims jsonb;
 begin
-    raise exception '%', columns;
     cols = (
         select
             array_agg(
