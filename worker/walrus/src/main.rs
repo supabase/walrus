@@ -360,14 +360,16 @@ fn process_record(
                 }
             }
 
-            match sql_functions::is_visible_through_filters(
-                &walcols,
-                &subscription_id_delegate_to_sql,
-                conn,
-            ) {
-                Ok(sub_ids) => subscription_id_is_visible_through_filters.extend(&sub_ids),
-                Err(err) => {
-                    error!("Failed to deletegate some filters to SQL: {}", err)
+            if subscription_id_delegate_to_sql.len() > 0 {
+                match sql_functions::is_visible_through_filters(
+                    &walcols,
+                    &subscription_id_delegate_to_sql,
+                    conn,
+                ) {
+                    Ok(sub_ids) => subscription_id_is_visible_through_filters.extend(&sub_ids),
+                    Err(err) => {
+                        error!("Failed to deletegate some filters to SQL: {}", err)
+                    }
                 }
             }
 
