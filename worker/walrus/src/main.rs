@@ -176,6 +176,7 @@ fn process_record(
     max_record_bytes: usize,
     conn: &mut PgConnection,
 ) -> Result<Vec<realtime_fmt::WALRLS>, String> {
+    // TODO subscription name as argument
     let is_in_publication =
         sql_functions::is_in_publication(&rec.schema, &rec.table, "supabase_multiplayer", conn)?;
     let is_subscribed_to = subscriptions.len() > 0;

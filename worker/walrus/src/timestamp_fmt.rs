@@ -6,7 +6,7 @@ use serde::{self, Deserialize, Deserializer, Serializer};
 const DESER_FORMAT: &'static str = "%Y-%m-%d %H:%M:%S%.f%#z";
 
 // Example: 2000-01-01T00:01:01Z
-const SER_FORMAT: &'static str = "%+";
+const SER_FORMAT: &'static str = "%Y-%m-%dT%H:%M:%S%.fZ";
 
 // The signature of a serialize_with function must follow the pattern:
 //
