@@ -7,22 +7,27 @@ pub mod sql_functions {
     use diesel::*;
 
     sql_function! {
+        #[sql_name = "realtime.is_rls_enabled"]
         fn is_rls_enabled(schema_name: Text, table_name: Text) -> Bool;
     }
 
     sql_function! {
+        #[sql_name = "realtime.is_in_publication"]
         fn is_in_publication(schema_name: Text, table_name: Text, publication_name: Text) -> Bool;
     }
 
     sql_function! {
+        #[sql_name = "realtime.selectable_columns"]
         fn selectable_columns(schema_name: Text, table_name: Text, role_name: Text) -> Array<Text>;
     }
 
     sql_function! {
+        #[sql_name = "realtime.is_visible_through_filters"]
         fn is_visible_through_filters(columns: Jsonb, subscription_ids: Array<Uuid> ) -> Array<Uuid>
     }
 
     sql_function! {
+        #[sql_name = "realtime.is_visible_through_rls"]
         fn is_visible_through_rls(schema_name: Text, table_name: Text, columns: Jsonb, subscription_ids: Array<Uuid>) -> Array<Uuid>
     }
 }

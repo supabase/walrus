@@ -5,7 +5,7 @@ use diesel::pg::{Pg, PgValue};
 use diesel::serialize::{self, IsNull, Output, ToSql, WriteTuple};
 use diesel::sql_types::{Record, Text};
 use diesel::*;
-use log::error;
+use log::{debug, error};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Write;
@@ -76,8 +76,11 @@ pub fn update_subscriptions(
         return ();
     }
 
+    debug!("Subscription record detected");
+
     if rec.action == wal2json::Action::T {
         subscriptions.clear();
+        debug!("Subscription truncate. Total {}", subscriptions.len());
         return ();
     }
 
@@ -120,23 +123,48 @@ pub fn update_subscriptions(
     match rec.action {
         wal2json::Action::I => {
             use crate::schema::realtime::subscription::dsl::*;
-            match subscription.filter(id.eq(id)).first::<Subscription>(conn) {
-                Ok(new_sub) => subscriptions.push(new_sub),
+            match subscription
+                .filter(id.eq(id_val))
+                .first::<Subscription>(conn)
+            {
+                Ok(new_sub) => {
+                    subscriptions.push(new_sub);
+                    debug!("Subscription inserted. Total {}", subscriptions.len());
+                }
                 Err(err) => error!("No subscription found: {} ", err),
             };
         }
         wal2json::Action::U => {
             // Delete existing sub
+            let before_update_count = subscriptions.len();
+
             subscriptions.retain_mut(|x| x.id != id_val);
 
             // Add updated sub
-            match subscription.filter(id.eq(id)).first::<Subscription>(conn) {
+            match subscription
+                .filter(id.eq(id_val))
+                .first::<Subscription>(conn)
+            {
                 Ok(new_sub) => subscriptions.push(new_sub),
                 Err(err) => error!("No subscription found: {} ", err),
             };
+
+            debug!(
+                "Subscription update. Total before {}, after {}. id_val {}",
+                before_update_count,
+                subscriptions.len(),
+                id_val,
+            );
         }
         wal2json::Action::D => {
+            let before_delete_count = subscriptions.len();
             subscriptions.retain(|x| x.id != id_val);
+
+            debug!(
+                "Subscription delete. Total before {}, after {}",
+                before_delete_count,
+                subscriptions.len()
+            );
         }
         wal2json::Action::T => {
             // Handled above

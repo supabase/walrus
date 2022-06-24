@@ -16,5 +16,6 @@ pub fn run_migrations(
         .expect("failed to set search path");
 
     connection.run_pending_migrations(MIGRATIONS)?;
+
     Ok(())
 }

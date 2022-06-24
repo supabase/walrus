@@ -2,9 +2,10 @@
 extern crate diesel;
 use clap::Parser;
 use diesel::prelude::*;
+use diesel::*;
 use env_logger;
 use itertools::Itertools;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use serde_json;
 use std::collections::HashMap;
 use std::io::{self, BufRead};
@@ -71,6 +72,11 @@ fn run(args: &Args) -> Result<(), String> {
     // Run pending migrations
     migrations::run_migrations(conn).expect("Pending migrations failed to execute");
     info!("Postgres connection established");
+
+    // Empty search path
+    sql_query("set search_path=''")
+        .execute(conn)
+        .expect("failed to set search path");
 
     let cmd = Command::new("pg_recvlogical")
         //&args
@@ -146,7 +152,10 @@ fn run(args: &Args) -> Result<(), String> {
                                     Ok(rows) => {
                                         for row in rows {
                                             match serde_json::to_string(&row) {
-                                                Ok(walrus_json) => println!("{}", walrus_json),
+                                                Ok(walrus_json) => {
+                                                    println!("{}", walrus_json);
+                                                    debug!("Pushed record for {}.{} with {} subscribers", row.wal.schema, row.wal.table, row.subscription_ids.len());
+                                                }
                                                 Err(err) => {
                                                     error!(
                                                         "Failed to serialize walrus result: {}",
@@ -197,8 +206,40 @@ fn process_record(
 ) -> Result<Vec<realtime_fmt::WALRLS>, String> {
     let is_in_publication =
         sql_functions::is_in_publication(&rec.schema, &rec.table, publication, conn)?;
-    let is_subscribed_to = subscriptions.len() > 0;
+
+    let load_subscriptions: Vec<&realtime_fmt::Subscription> = subscriptions
+        .iter()
+        .filter(|x| &x.schema_name == "load_messages")
+        .map(|x| x)
+        .collect();
+
+    debug!("N load subs {}", &load_subscriptions.len(),);
+
+    // Subscriptions to the current entity
+    let entity_subscriptions: Vec<&realtime_fmt::Subscription> = subscriptions
+        .iter()
+        .filter(|x| &x.schema_name == &rec.schema)
+        .filter(|x| &x.table_name == &rec.table)
+        .map(|x| x)
+        .collect();
+
+    if subscriptions.len() > 0 {
+        debug!(
+            "Rec {} {} table {} {}",
+            &rec.schema,
+            &rec.table,
+            &subscriptions.first().unwrap().schema_name,
+            &subscriptions.first().unwrap().table_name,
+        );
+    }
+
+    let is_subscribed_to = entity_subscriptions.len() > 0;
     let is_rls_enabled = sql_functions::is_rls_enabled(&rec.schema, &rec.table, conn)?;
+
+    debug!(
+        "Processing record: {}.{} inpub: {}, entity_subs {}, rls_on {}",
+        &rec.schema, &rec.table, is_in_publication, is_subscribed_to, is_rls_enabled
+    );
 
     let exceeds_max_size = serde_json::json!(rec).to_string().len() > max_record_bytes;
 
@@ -211,16 +252,9 @@ fn process_record(
 
     // If the table isn't in the publication or no one is subscribed, do no work
     if !(is_in_publication && is_subscribed_to && action != realtime_fmt::Action::TRUNCATE) {
+        debug!("Early exit. Not in pub or no one listening");
         return Ok(vec![]);
     }
-
-    // Subscriptions to the current entity
-    let entity_subscriptions: Vec<&realtime_fmt::Subscription> = subscriptions
-        .iter()
-        .filter(|x| &x.schema_name == &rec.schema)
-        .filter(|x| &x.table_name == &rec.table)
-        .map(|x| x)
-        .collect();
 
     let subscribed_roles: Vec<&String> = entity_subscriptions
         .iter()
