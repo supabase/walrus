@@ -110,15 +110,10 @@ as
 $$
     with x(maybe_quoted_name) as (
          select
-            coalesce(
-                nullif(split_part($1::text, '.', 1), ''),
-                (
-                    select relnamespace::regnamespace::text
-                    from pg_class
-                    where oid = $1
-                    limit 1
-                )
-            )
+            relnamespace::regnamespace::text
+        from pg_class
+        where oid = $1
+        limit 1
     )
     select
         case
@@ -300,3 +295,14 @@ begin
     return visible_to_subscription_ids;
 end;
 $$
+
+alter table realtime.subscription add column schema_name text generated always as (realtime.to_schema_name(entity)) stored;
+alter table realtime.subscription add column table_name text generated always as (realtime.to_table_name(entity)) stored;
+alter table realtime.subscription add column claims_role_name text generated always as (realtime.to_regrole((claims ->> 'role'::text))) stored;
+
+alter table realtime.subscription alter schema_name set not null;
+alter table realtime.subscription alter table_name set not null;
+alter table realtime.subscription alter claims_role_name set not null;
+-- alter table realtime.subscription alter filters drop default;
+-- alter table realtime.subscription alter filters type jsonb using to_jsonb(filters);
+-- alter table realtime.subscription alter filters set default '[]';

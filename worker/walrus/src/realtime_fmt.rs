@@ -1,9 +1,14 @@
 use crate::wal2json;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, Utc};
+use diesel::deserialize::{self, FromSql};
+use diesel::pg::{Pg, PgValue};
+use diesel::serialize::{self, IsNull, Output, ToSql, WriteTuple};
+use diesel::sql_types::{Record, Text};
 use diesel::*;
 use log::error;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::Write;
 use std::*;
 use uuid;
 
@@ -43,37 +48,20 @@ pub struct WALRLS {
 }
 
 // Subscriptions
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub enum Op {
-    #[serde(alias = "eq")]
-    Equal,
-    #[serde(alias = "neq")]
-    NotEqual,
-    #[serde(alias = "lt")]
-    LessThan,
-    #[serde(alias = "lte")]
-    LessThanOrEqual,
-    #[serde(alias = "gt")]
-    GreaterThan,
-    #[serde(alias = "gte")]
-    GreaterThanOrEqual,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct UserDefinedFilter {
-    pub column_name: String,
-    pub op: Op,
-    pub value: String, // Why did I make this a text field?,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, Queryable)]
 pub struct Subscription {
     pub id: i64,
+    pub subscription_id: uuid::Uuid,
+    pub entity: i32,
+    // This also works for anonymous deser of filters (schema.rs also must change)
+    //pub filters: Vec<(String, EqualityOp, String)>,
+    pub filters: Vec<UserDefinedFilter>,
+    pub claims: serde_json::Value,
+    pub claims_role: i32,
+    pub created_at: NaiveDateTime,
     pub schema_name: String,
     pub table_name: String,
-    pub subscription_id: uuid::Uuid,
-    pub filters: Vec<UserDefinedFilter>,
-    pub claims_role: String,
+    pub claims_role_name: String,
 }
 
 /// Checks to see if the new record is a change to realtime.subscriptions
@@ -93,7 +81,7 @@ pub fn update_subscriptions(
         return ();
     }
 
-    let id: i64 = match rec
+    let id_val: i64 = match rec
         .columns
         .as_ref()
         // Deletes have the id value in the identity field
@@ -105,7 +93,7 @@ pub fn update_subscriptions(
     {
         Some(id_json) => match id_json {
             serde_json::Value::Number(id_num) => match id_num.as_i64() {
-                Some(id) => id,
+                Some(id_val) => id_val,
                 None => {
                     error!(
                         "Invalid id in realtime.subscription. Expected i64, got: {}",
@@ -127,35 +115,113 @@ pub fn update_subscriptions(
             return ();
         }
     };
+    use crate::schema::realtime::subscription::dsl::*;
 
     match rec.action {
         wal2json::Action::I => {
-            match crate::sql_functions::get_subscription_by_id(id, conn) {
+            use crate::schema::realtime::subscription::dsl::*;
+            match subscription.filter(id.eq(id)).first::<Subscription>(conn) {
                 Ok(new_sub) => subscriptions.push(new_sub),
-                Err(err) => error!(
-                    "Failed to parse wal2json record to realtime.subscription: {} ",
-                    err
-                ),
+                Err(err) => error!("No subscription found: {} ", err),
             };
         }
         wal2json::Action::U => {
             // Delete existing sub
-            subscriptions.retain_mut(|x| x.id != id);
+            subscriptions.retain_mut(|x| x.id != id_val);
 
             // Add updated sub
-            match crate::sql_functions::get_subscription_by_id(id, conn) {
+            match subscription.filter(id.eq(id)).first::<Subscription>(conn) {
                 Ok(new_sub) => subscriptions.push(new_sub),
-                Err(err) => error!(
-                    "Failed to parse wal2json record to realtime.subscription: {} ",
-                    err
-                ),
+                Err(err) => error!("No subscription found: {} ", err),
             };
         }
         wal2json::Action::D => {
-            subscriptions.retain(|x| x.id != id);
+            subscriptions.retain(|x| x.id != id_val);
         }
         wal2json::Action::T => {
             // Handled above
         }
     };
+}
+
+#[derive(SqlType, PartialEq)]
+#[diesel(postgres_type(schema = "realtime", name = "equality_op"))]
+pub struct OpType;
+
+#[derive(Debug, PartialEq, FromSqlRow, AsExpression, Clone, Deserialize, Serialize)]
+#[diesel(sql_type = OpType)]
+pub enum Op {
+    #[serde(alias = "eq")]
+    Equal,
+    #[serde(alias = "neq")]
+    NotEqual,
+    #[serde(alias = "lt")]
+    LessThan,
+    #[serde(alias = "lte")]
+    LessThanOrEqual,
+    #[serde(alias = "gt")]
+    GreaterThan,
+    #[serde(alias = "gte")]
+    GreaterThanOrEqual,
+}
+
+impl ToSql<OpType, Pg> for Op {
+    fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, Pg>) -> serialize::Result {
+        match *self {
+            Op::Equal => out.write_all(b"eq")?,
+            Op::NotEqual => out.write_all(b"neq")?,
+            Op::LessThan => out.write_all(b"lt")?,
+            Op::LessThanOrEqual => out.write_all(b"lte")?,
+            Op::GreaterThan => out.write_all(b"gt")?,
+            Op::GreaterThanOrEqual => out.write_all(b"gt")?,
+        }
+        Ok(IsNull::No)
+    }
+}
+
+impl FromSql<OpType, Pg> for Op {
+    fn from_sql(bytes: PgValue<'_>) -> deserialize::Result<Self> {
+        match bytes.as_bytes() {
+            b"eq" => Ok(Op::Equal),
+            b"neq" => Ok(Op::NotEqual),
+            b"lt" => Ok(Op::LessThan),
+            b"lte" => Ok(Op::LessThanOrEqual),
+            b"gt" => Ok(Op::GreaterThan),
+            b"gte" => Ok(Op::GreaterThanOrEqual),
+            _ => Err("Unrecognized enum variant".into()),
+        }
+    }
+}
+
+#[derive(SqlType, PartialEq)]
+#[diesel(postgres_type(schema = "realtime", name = "user_defined_filter"))]
+pub struct UserDefinedFilterType;
+
+#[derive(Debug, PartialEq, FromSqlRow, AsExpression, Clone, Deserialize, Serialize)]
+#[diesel(sql_type = UserDefinedFilterType)]
+pub struct UserDefinedFilter {
+    pub column_name: String,
+    pub op: Op,
+    pub value: String, // Why did I make this a text field?,
+}
+
+impl ToSql<UserDefinedFilterType, Pg> for UserDefinedFilter {
+    fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, Pg>) -> serialize::Result {
+        WriteTuple::<(Text, OpType, Text)>::write_tuple(
+            &(self.column_name.as_str(), &self.op, self.value.as_str()),
+            out,
+        )
+    }
+}
+
+impl FromSql<UserDefinedFilterType, Pg> for UserDefinedFilter {
+    fn from_sql(bytes: PgValue<'_>) -> deserialize::Result<Self> {
+        let (column_name, op, value) =
+            FromSql::<Record<(Text, OpType, Text)>, Pg>::from_sql(bytes)?;
+        Ok(UserDefinedFilter {
+            column_name,
+            op,
+            value,
+        })
+    }
 }

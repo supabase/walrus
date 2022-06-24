@@ -1,8 +1,11 @@
+#[macro_use]
+extern crate diesel;
 use clap::Parser;
+use diesel::prelude::*;
 use diesel::*;
 use env_logger;
 use itertools::Itertools;
-use log::{debug, error, info, warn};
+use log::{error, info, warn};
 use serde_json;
 use std::collections::HashMap;
 use std::io::{self, BufRead};
@@ -13,6 +16,7 @@ use std::time;
 mod filters;
 mod migrations;
 mod realtime_fmt;
+mod schema;
 mod sql_functions;
 mod timestamp_fmt;
 mod wal2json;
@@ -36,7 +40,6 @@ fn main() {
     let args = Args::parse();
 
     // enable logger
-    //env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     loop {
@@ -99,8 +102,18 @@ fn run(args: &Args) -> Result<(), String> {
 
             // Load initial snapshot of subscriptions
             info!("Snapshot of subscriptions loading");
-            let mut subscriptions = sql_functions::get_subscriptions(conn)?;
+            use schema::realtime::subscription::dsl::*;
+            let mut subscriptions = match subscription.load::<realtime_fmt::Subscription>(conn) {
+                Ok(subscriptions) => subscriptions,
+                Err(err) => {
+                    cmd.kill().unwrap();
+                    error!("Error loading subscriptions: {}", err);
+                    return Err("Error loading subscriptions".to_string());
+                }
+            };
             info!("Snapshot of subscriptions loaded");
+
+            //println!("subs {:?}", subscriptions);
 
             // Iterate input data
             for input_line in stdin_lines {
@@ -109,6 +122,7 @@ fn run(args: &Args) -> Result<(), String> {
                         let result_record = serde_json::from_str::<wal2json::Record>(&line);
                         match result_record {
                             Ok(wal2json_record) => {
+                                //println!("rec {:?}", wal2json_record);
                                 // Update subscriptions if needed
                                 realtime_fmt::update_subscriptions(
                                     &wal2json_record,
@@ -176,7 +190,7 @@ fn process_record(
     max_record_bytes: usize,
     conn: &mut PgConnection,
 ) -> Result<Vec<realtime_fmt::WALRLS>, String> {
-    // TODO subscription name as argument
+    // TODO publication name as argument
     let is_in_publication =
         sql_functions::is_in_publication(&rec.schema, &rec.table, "supabase_multiplayer", conn)?;
     let is_subscribed_to = subscriptions.len() > 0;
@@ -196,7 +210,7 @@ fn process_record(
         .iter()
         .filter(|x| &x.schema_name == &rec.schema)
         .filter(|x| &x.table_name == &rec.table)
-        .map(|x| &x.claims_role)
+        .map(|x| &x.claims_role_name)
         .unique()
         .collect();
 
@@ -241,7 +255,7 @@ fn process_record(
         // Subscriptions to current entity + role
         let entity_role_subscriptions: Vec<&realtime_fmt::Subscription> = entity_subscriptions
             .iter()
-            .filter(|x| &x.claims_role == role)
+            .filter(|x| &x.claims_role_name == role)
             .map(|x| *x)
             .collect();
 
