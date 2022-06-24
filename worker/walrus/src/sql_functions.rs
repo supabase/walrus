@@ -19,14 +19,6 @@ pub mod sql_functions {
     }
 
     sql_function! {
-        fn get_subscriptions() -> Array<Jsonb>;
-    }
-
-    sql_function! {
-        fn get_subscription_by_id(id: BigInt) -> Jsonb;
-    }
-
-    sql_function! {
         fn is_visible_through_filters(columns: Jsonb, subscription_ids: Array<Uuid> ) -> Array<Uuid>
     }
 
@@ -122,36 +114,4 @@ pub fn is_visible_through_rls(
     ))
     .first(conn)
     .map_err(|x| format!("{}", x))
-}
-
-pub fn get_subscriptions(
-    conn: &mut PgConnection,
-) -> Result<Vec<crate::realtime_fmt::Subscription>, String> {
-    let subs: Vec<serde_json::Value> = select(sql_functions::get_subscriptions())
-        .first(conn)
-        .map_err(|x| format!("{}", x))?;
-
-    let mut res = vec![];
-
-    for sub_json in subs {
-        let sub: crate::realtime_fmt::Subscription =
-            serde_json::from_value(sub_json).map_err(|x| format!("{}", x))?;
-        res.push(sub);
-    }
-
-    Ok(res)
-}
-
-pub fn get_subscription_by_id(
-    id: i64,
-    conn: &mut PgConnection,
-) -> Result<crate::realtime_fmt::Subscription, String> {
-    let sub_value: serde_json::Value = select(sql_functions::get_subscription_by_id(id))
-        .first(conn)
-        .map_err(|x| format!("{}", x))?;
-
-    let sub: crate::realtime_fmt::Subscription =
-        serde_json::from_value(sub_value).map_err(|x| format!("{}", x))?;
-
-    Ok(sub)
 }

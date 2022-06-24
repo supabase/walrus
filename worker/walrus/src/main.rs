@@ -2,7 +2,6 @@
 extern crate diesel;
 use clap::Parser;
 use diesel::prelude::*;
-use diesel::*;
 use env_logger;
 use itertools::Itertools;
 use log::{error, info, warn};
@@ -364,7 +363,7 @@ fn process_record(
                     }
                     Ok(false) => (),
                     // delegate to SQL when we can't handle the comparison in rust
-                    Err(err) => {
+                    Err(_) => {
                         //debug!(
                         //    "Filters delegated to SQL: {:?}. Error: {}",
                         //    &sub.filters, err

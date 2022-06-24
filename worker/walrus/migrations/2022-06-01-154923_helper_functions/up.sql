@@ -129,50 +129,6 @@ $$
 $$;
 
 
-create function realtime.get_subscriptions(
-)
-    returns jsonb[]
-    language sql
-as $$
-    select
-        coalesce(
-            array_agg(
-                jsonb_build_object(
-                    'id', id,
-                    'schema_name', realtime.to_schema_name(entity),
-                    'table_name', realtime.to_table_name(entity),
-                    'subscription_id', subscription_id,
-                    'filters', filters,
-                    'claims_role', claims_role
-                )
-            ),
-            '{}'
-        )
-    from
-        realtime.subscription s
-    limit 1
-$$;
-
-create function realtime.get_subscription_by_id(id bigint)
-    returns jsonb
-    language sql
-as $$
-    select
-        jsonb_build_object(
-            'id', id,
-            'schema_name', realtime.to_schema_name(entity),
-            'table_name', realtime.to_table_name(entity),
-            'subscription_id', subscription_id,
-            'filters', filters,
-            'claims_role', claims_role
-        )
-    from
-        realtime.subscription s
-    where
-        s.id = $1
-    limit 1
-$$;
-
 create function realtime.is_visible_through_filters(
     columns jsonb,
     subscription_ids uuid[]
