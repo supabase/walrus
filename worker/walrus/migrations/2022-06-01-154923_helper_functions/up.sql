@@ -250,7 +250,7 @@ begin
 
     return visible_to_subscription_ids;
 end;
-$$
+$$;
 
 alter table realtime.subscription add column schema_name text generated always as (realtime.to_schema_name(entity)) stored;
 alter table realtime.subscription add column table_name text generated always as (realtime.to_table_name(entity)) stored;
