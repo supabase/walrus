@@ -32,6 +32,9 @@ struct Args {
 
     #[clap(long, default_value = "postgresql://postgres@localhost:5432/postgres")]
     connection: String,
+
+    #[clap(long, default_value = "supabase_multiplayer")]
+    publication: String,
 }
 
 fn main() {
@@ -56,6 +59,7 @@ fn main() {
 fn run(args: &Args) -> Result<(), String> {
     // Connect to Postgres
     let conn_result = &mut PgConnection::establish(&args.connection);
+    let publication = &args.publication;
 
     let conn = match conn_result {
         Ok(c) => c,
@@ -133,6 +137,7 @@ fn run(args: &Args) -> Result<(), String> {
                                 let walrus = process_record(
                                     &wal2json_record,
                                     &subscriptions,
+                                    publication,
                                     1024 * 1024,
                                     conn,
                                 );
@@ -186,12 +191,12 @@ fn has_primary_key(rec: &wal2json::Record) -> bool {
 fn process_record(
     rec: &wal2json::Record,
     subscriptions: &Vec<realtime_fmt::Subscription>,
+    publication: &str,
     max_record_bytes: usize,
     conn: &mut PgConnection,
 ) -> Result<Vec<realtime_fmt::WALRLS>, String> {
-    // TODO publication name as argument
     let is_in_publication =
-        sql_functions::is_in_publication(&rec.schema, &rec.table, "supabase_multiplayer", conn)?;
+        sql_functions::is_in_publication(&rec.schema, &rec.table, publication, conn)?;
     let is_subscribed_to = subscriptions.len() > 0;
     let is_rls_enabled = sql_functions::is_rls_enabled(&rec.schema, &rec.table, conn)?;
 
