@@ -202,6 +202,18 @@ fn process_record(
 
     let exceeds_max_size = serde_json::json!(rec).to_string().len() > max_record_bytes;
 
+    let action = match rec.action {
+        wal2json::Action::I => realtime_fmt::Action::INSERT,
+        wal2json::Action::U => realtime_fmt::Action::UPDATE,
+        wal2json::Action::D => realtime_fmt::Action::DELETE,
+        wal2json::Action::T => realtime_fmt::Action::TRUNCATE,
+    };
+
+    // If the table isn't in the publication or no one is subscribed, do no work
+    if !(is_in_publication && is_subscribed_to && action != realtime_fmt::Action::TRUNCATE) {
+        return Ok(vec![]);
+    }
+
     // Subscriptions to the current entity
     let entity_subscriptions: Vec<&realtime_fmt::Subscription> = subscriptions
         .iter()
@@ -219,18 +231,6 @@ fn process_record(
         .collect();
 
     let mut result: Vec<realtime_fmt::WALRLS> = vec![];
-
-    let action = match rec.action {
-        wal2json::Action::I => realtime_fmt::Action::INSERT,
-        wal2json::Action::U => realtime_fmt::Action::UPDATE,
-        wal2json::Action::D => realtime_fmt::Action::DELETE,
-        wal2json::Action::T => realtime_fmt::Action::TRUNCATE,
-    };
-
-    // If the table isn't in the publication or no one is subscribed, do no work
-    if !(is_in_publication && is_subscribed_to && action != realtime_fmt::Action::TRUNCATE) {
-        return Ok(vec![]);
-    }
 
     // If the table has no primary key, return
     if action != realtime_fmt::Action::DELETE && !has_primary_key(rec) {

@@ -259,6 +259,5 @@ alter table realtime.subscription add column claims_role_name text generated alw
 alter table realtime.subscription alter schema_name set not null;
 alter table realtime.subscription alter table_name set not null;
 alter table realtime.subscription alter claims_role_name set not null;
--- alter table realtime.subscription alter filters drop default;
--- alter table realtime.subscription alter filters type jsonb using to_jsonb(filters);
--- alter table realtime.subscription alter filters set default '[]';
+
+create index ix_realtime_subscription_subscription_id on realtime.subscription (subscription_id);
