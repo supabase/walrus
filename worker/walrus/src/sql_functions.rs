@@ -23,12 +23,12 @@ pub mod sql_functions {
 
     sql_function! {
         #[sql_name = "realtime.is_visible_through_filters"]
-        fn is_visible_through_filters(columns: Jsonb, subscription_ids: Array<Uuid> ) -> Array<Uuid>
+        fn is_visible_through_filters(columns: Jsonb, ids: Array<Int8> ) -> Array<Int8>
     }
 
     sql_function! {
         #[sql_name = "realtime.is_visible_through_rls"]
-        fn is_visible_through_rls(schema_name: Text, table_name: Text, columns: Jsonb, subscription_ids: Array<Uuid>) -> Array<Uuid>
+        fn is_visible_through_rls(schema_name: Text, table_name: Text, columns: Jsonb, ids: Array<Int8>) -> Array<Int8>
     }
 }
 
@@ -92,13 +92,13 @@ pub fn selectable_columns(
 
 pub fn is_visible_through_filters(
     columns: &Vec<crate::walrus_fmt::WALColumn>,
-    subscription_ids: &Vec<uuid::Uuid>,
+    ids: &Vec<i64>,
     // TODO: convert this to use subscription_ids to reduce n calls
     conn: &mut PgConnection,
-) -> Result<Vec<uuid::Uuid>, String> {
+) -> Result<Vec<i64>, String> {
     select(sql_functions::is_visible_through_filters(
         serde_json::json!(columns),
-        subscription_ids,
+        ids,
     ))
     .first(conn)
     .map_err(|x| format!("{}", x))
@@ -108,14 +108,14 @@ pub fn is_visible_through_rls(
     schema_name: &str,
     table_name: &str,
     columns: &Vec<crate::walrus_fmt::WALColumn>,
-    subscription_ids: &Vec<uuid::Uuid>,
+    ids: &Vec<i64>,
     conn: &mut PgConnection,
-) -> Result<Vec<uuid::Uuid>, String> {
+) -> Result<Vec<i64>, String> {
     select(sql_functions::is_visible_through_rls(
         schema_name,
         table_name,
         serde_json::to_value(columns).unwrap(),
-        subscription_ids,
+        ids,
     ))
     .first(conn)
     .map_err(|x| format!("{}", x))

@@ -131,15 +131,15 @@ $$;
 
 create function realtime.is_visible_through_filters(
     columns jsonb,
-    subscription_ids uuid[]
+    ids int8[] -- realtime.subscription.id
 )
-    returns uuid[]
+    returns int8[]
     language plpgsql
 as $$
 declare
     cols realtime.wal_column[];
-    visible_to_subscription_ids uuid[] = '{}';
-    subscription_id uuid;
+    visible_to_subscription_ids int8[] = '{}';
+    subscription_id int8;
     filters realtime.user_defined_filter[];
     subscription_has_access bool;
 begin
@@ -161,12 +161,12 @@ begin
 
     for subscription_id, filters in (
         select
-            subs.subscription_id,
+            subs.id,
             subs.filters
         from
             realtime.subscription subs
         where
-            subs.subscription_id = any(subscription_ids)
+            subs.id = any(ids)
         )
     loop
 
@@ -189,16 +189,16 @@ create function realtime.is_visible_through_rls(
     schema_name text,
     table_name text,
     columns jsonb,
-    subscription_ids uuid[]
+    ids int8[]
 )
-    returns uuid[]
+    returns int8[]
     language plpgsql
 as $$
 declare
     entity_ regclass = format('%I.%I', schema_name, table_name)::regclass;
     cols realtime.wal_column[];
-    visible_to_subscription_ids uuid[] = '{}';
-    subscription_id uuid;
+    visible_to_subscription_ids int8[] = '{}';
+    subscription_id int8;
     subscription_has_access bool;
     claims jsonb;
 begin
@@ -226,12 +226,12 @@ begin
 
     for subscription_id, claims in (
         select
-            subs.subscription_id,
+            subs.id,
             subs.claims
         from
             realtime.subscription subs
         where
-            subs.subscription_id = any(subscription_ids)
+            subs.id = any(ids)
         )
     loop
         -- Check if RLS allows the role to see the record

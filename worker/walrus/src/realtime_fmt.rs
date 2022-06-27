@@ -48,7 +48,7 @@ pub struct WALRLS {
 }
 
 // Subscriptions
-#[derive(Serialize, Deserialize, Clone, Debug, Queryable)]
+#[derive(Serialize, Deserialize, Clone, Debug, Queryable, Eq, PartialEq)]
 pub struct Subscription {
     pub id: i64,
     pub subscription_id: uuid::Uuid,
@@ -176,7 +176,7 @@ pub fn update_subscriptions(
 #[diesel(postgres_type(schema = "realtime", name = "equality_op"))]
 pub struct OpType;
 
-#[derive(Debug, PartialEq, FromSqlRow, AsExpression, Clone, Deserialize, Serialize)]
+#[derive(Debug, PartialEq, FromSqlRow, AsExpression, Clone, Deserialize, Serialize, Eq)]
 #[diesel(sql_type = OpType)]
 pub enum Op {
     #[serde(alias = "eq")]
@@ -225,7 +225,7 @@ impl FromSql<OpType, Pg> for Op {
 #[diesel(postgres_type(schema = "realtime", name = "user_defined_filter"))]
 pub struct UserDefinedFilterType;
 
-#[derive(Debug, PartialEq, FromSqlRow, AsExpression, Clone, Deserialize, Serialize)]
+#[derive(Debug, PartialEq, FromSqlRow, AsExpression, Clone, Deserialize, Serialize, Eq)]
 #[diesel(sql_type = UserDefinedFilterType)]
 pub struct UserDefinedFilter {
     pub column_name: String,

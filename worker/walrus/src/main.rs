@@ -122,7 +122,7 @@ fn run(args: &Args) -> Result<(), String> {
             };
             info!("Snapshot of subscriptions loaded");
 
-            //println!("subs {:?}", subscriptions);
+            // println!("subs {:?}", subscriptions);
 
             // Iterate input data
             for input_line in stdin_lines {
@@ -388,8 +388,8 @@ fn process_record(
                 .collect();
 
             // User Defined Filters
-            let mut subscription_id_is_visible_through_filters = vec![];
-            let mut subscription_id_delegate_to_sql = vec![];
+            let mut visible_through_filters = vec![];
+            let mut delegate_to_sql_filters = vec![];
 
             for sub in entity_role_subscriptions {
                 match filters::visible_through_filters(
@@ -398,7 +398,7 @@ fn process_record(
                 ) {
                     Ok(true) => {
                         //debug!("Filters handled in rust: {:?}", &sub.filters);
-                        subscription_id_is_visible_through_filters.push(sub.subscription_id);
+                        visible_through_filters.push(sub);
                     }
                     Ok(false) => (),
                     // delegate to SQL when we can't handle the comparison in rust
@@ -407,18 +407,25 @@ fn process_record(
                         //    "Filters delegated to SQL: {:?}. Error: {}",
                         //    &sub.filters, err
                         //);
-                        subscription_id_delegate_to_sql.push(sub.subscription_id);
+                        delegate_to_sql_filters.push(sub);
                     }
                 }
             }
 
-            if subscription_id_delegate_to_sql.len() > 0 {
+            if delegate_to_sql_filters.len() > 0 {
                 match sql_functions::is_visible_through_filters(
                     &walcols,
-                    &subscription_id_delegate_to_sql,
+                    &delegate_to_sql_filters.iter().map(|x| x.id).collect(),
                     conn,
                 ) {
-                    Ok(sub_ids) => subscription_id_is_visible_through_filters.extend(&sub_ids),
+                    Ok(sub_ids) => {
+                        for sub in delegate_to_sql_filters
+                            .iter()
+                            .filter(|x| sub_ids.contains(&x.id))
+                        {
+                            visible_through_filters.push(sub)
+                        }
+                    }
                     Err(err) => {
                         error!("Failed to deletegate some filters to SQL: {}", err)
                     }
@@ -426,21 +433,25 @@ fn process_record(
             }
 
             // Row Level Security
-            let subscription_ids_to_notify = match is_rls_enabled
-                && subscription_id_is_visible_through_filters.len() > 0
+            let subscriptions_to_notify: Vec<&realtime_fmt::Subscription> = match is_rls_enabled
+                && visible_through_filters.len() > 0
                 && !vec![realtime_fmt::Action::DELETE, realtime_fmt::Action::TRUNCATE]
                     .contains(&action)
             {
-                false => subscription_id_is_visible_through_filters,
+                false => visible_through_filters,
                 true => {
                     match sql_functions::is_visible_through_rls(
                         &rec.schema,
                         &rec.table,
                         &walcols,
-                        &subscription_id_is_visible_through_filters,
+                        &visible_through_filters.iter().map(|x| x.id).collect(),
                         conn,
                     ) {
-                        Ok(sub_ids) => sub_ids,
+                        Ok(sub_ids) => visible_through_filters
+                            .iter()
+                            .filter(|x| sub_ids.contains(&x.id))
+                            .map(|x| *x)
+                            .collect(),
                         Err(err) => {
                             error!("Failed to delegate RLS to SQL: {}", err);
                             vec![]
@@ -460,7 +471,11 @@ fn process_record(
                     old_record: old_record_elem,
                 },
                 is_rls_enabled,
-                subscription_ids: subscription_ids_to_notify,
+                subscription_ids: subscriptions_to_notify
+                    .iter()
+                    .map(|x| x.subscription_id)
+                    .unique()
+                    .collect(),
                 errors: match exceeds_max_size {
                     true => vec!["Error 413: Payload Too Large".to_string()],
                     false => vec![],
