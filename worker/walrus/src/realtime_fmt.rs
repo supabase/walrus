@@ -131,7 +131,7 @@ pub fn update_subscriptions(
                     subscriptions.push(new_sub);
                     debug!("Subscription inserted. Total {}", subscriptions.len());
                 }
-                Err(err) => error!("No subscription found: {} ", err),
+                Err(err) => error!("No subscription found: id={}, Error: {} ", id_val, err),
             };
         }
         wal2json::Action::U => {
