@@ -71,8 +71,9 @@ async fn main() {
     let args = Args::parse();
     let addr = build_url(&args.url, &args.header);
     let url = url::Url::parse(&addr).expect("invalid URL");
+    let topic = args.topic.to_string();
 
-    println!("{:?}", args);
+    info!("{:?}", args);
 
     // enable logger
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
@@ -93,13 +94,13 @@ async fn main() {
                 info!("WebSocket handshake successful");
                 let (mut write, read) = ws_stream.split();
 
-                write = join_topic(write, args.topic.to_string()).await;
+                write = join_topic(write, topic.to_string()).await;
 
                 // Futures channel
                 let (tx, rx) = futures_channel::mpsc::unbounded();
                 let heartbeat_tx = tx.clone();
 
-                tokio::spawn(read_stdin(tx, args.topic.to_string()));
+                tokio::spawn(read_stdin(tx, topic.to_string()));
                 tokio::spawn(heartbeat(heartbeat_tx));
 
                 // Map
@@ -221,6 +222,9 @@ async fn heartbeat(tx: futures_channel::mpsc::UnboundedSender<Message>) {
         // Wrap phoenix message in a websocket message
         let msg = Message::Text(serde_json::to_string(&phoenix_msg).unwrap());
         // push to futures stream
-        tx.unbounded_send(msg).unwrap();
+        match tx.unbounded_send(msg) {
+            Ok(()) => (),
+            Err(err) => error!("Error sending heatbeat: {}", err),
+        };
     }
 }
