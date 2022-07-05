@@ -36,6 +36,10 @@ struct Args {
 
     #[clap(long, default_value = "supabase_multiplayer")]
     publication: String,
+
+    // Exit when no work remains
+    #[clap(long)]
+    exit_on_no_work: bool,
 }
 
 fn main() {
@@ -49,6 +53,10 @@ fn main() {
         match run(&args) {
             Err(err) => {
                 warn!("Error: {}", err);
+
+                if args.exit_on_no_work {
+                    return ();
+                }
             }
             _ => continue,
         };
@@ -121,8 +129,6 @@ fn run(args: &Args) -> Result<(), String> {
                 }
             };
             info!("Snapshot of subscriptions loaded");
-
-            // println!("subs {:?}", subscriptions);
 
             // Iterate input data
             for input_line in stdin_lines {
@@ -206,14 +212,6 @@ fn process_record(
 ) -> Result<Vec<realtime_fmt::WALRLS>, String> {
     let is_in_publication =
         sql_functions::is_in_publication(&rec.schema, &rec.table, publication, conn)?;
-
-    let load_subscriptions: Vec<&realtime_fmt::Subscription> = subscriptions
-        .iter()
-        .filter(|x| &x.schema_name == "load_messages")
-        .map(|x| x)
-        .collect();
-
-    debug!("N load subs {}", &load_subscriptions.len(),);
 
     // Subscriptions to the current entity
     let entity_subscriptions: Vec<&realtime_fmt::Subscription> = subscriptions
@@ -486,4 +484,81 @@ fn process_record(
     }
 
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate diesel;
+    use crate::realtime_fmt::Subscription;
+    use crate::schema::realtime::subscription::dsl::*;
+    use crate::wal2json;
+    use chrono::Utc;
+    use diesel::prelude::*;
+    use diesel::*;
+    use serde_json::json;
+    use uuid;
+
+    fn establish_connection() -> PgConnection {
+        let database_url = "postgresql://postgres:password@localhost:5501/postgres";
+        PgConnection::establish(&database_url).unwrap()
+    }
+
+    fn clean(conn: &mut PgConnection) {
+        delete(subscription).execute(conn).unwrap();
+    }
+
+    #[test]
+    fn test_basic() {
+        let mut conn = establish_connection();
+
+        let claim_sub = uuid::Uuid::new_v4();
+
+        insert_into(subscription)
+            .values((
+                subscription_id.eq(uuid::Uuid::new_v4()),
+                entity.eq(16487),
+                claims.eq(json!({
+                    "role": "postgres",
+                    "email": "example@example.com",
+                    "sub": claim_sub
+                })),
+            ))
+            .execute(&mut conn)
+            .unwrap();
+
+        let subscriptions = subscription.load::<Subscription>(&mut conn).unwrap();
+        clean(&mut conn);
+
+        assert_eq!(subscriptions.len(), 1);
+    }
+
+    #[test]
+    fn test_no_one_listening() {
+        let mut conn = establish_connection();
+
+        let rec = wal2json::Record {
+            action: wal2json::Action::I,
+            schema: "public".to_string(),
+            table: "notes".to_string(),
+            pk: Some(vec![wal2json::PrimaryKeyRef {
+                name: "id".to_string(),
+                type_: "int4".to_string(), // todo
+                typeoid: 4,                // todo
+            }]),
+            columns: Some(vec![]),
+            identity: None,
+            timestamp: Utc::now(),
+        };
+
+        let res = crate::process_record(
+            &rec,
+            &vec![],
+            "supabase_multiplayer",
+            1024 * 1024,
+            &mut conn,
+        )
+        .unwrap();
+
+        assert_eq!(res, vec![]);
+    }
 }
