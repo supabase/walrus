@@ -1,3 +1,4 @@
+use crate::sql::schema::realtime::subscription::dsl::*;
 use crate::wal2json;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use diesel::deserialize::{self, FromSql};
@@ -118,11 +119,9 @@ pub fn update_subscriptions(
             return ();
         }
     };
-    use crate::schema::realtime::subscription::dsl::*;
 
     match rec.action {
         wal2json::Action::I => {
-            use crate::schema::realtime::subscription::dsl::*;
             match subscription
                 .filter(id.eq(id_val))
                 .first::<Subscription>(conn)

@@ -7,6 +7,7 @@ use env_logger;
 use itertools::Itertools;
 use log::{debug, error, info, warn};
 use serde_json;
+use sql::schema::realtime::subscription::dsl::*;
 use std::collections::HashMap;
 use std::io::{self, BufRead};
 use std::process::{Command, Stdio};
@@ -14,9 +15,8 @@ use std::thread::sleep;
 use std::time;
 
 mod filters;
-mod migrations;
 mod realtime_fmt;
-mod schema;
+mod sql;
 mod sql_functions;
 mod timestamp_fmt;
 mod wal2json;
@@ -78,7 +78,7 @@ fn run(args: &Args) -> Result<(), String> {
     };
 
     // Run pending migrations
-    migrations::run_migrations(conn).expect("Pending migrations failed to execute");
+    sql::migrations::run_migrations(conn).expect("Pending migrations failed to execute");
     info!("Postgres connection established");
 
     // Empty search path
@@ -119,7 +119,6 @@ fn run(args: &Args) -> Result<(), String> {
 
             // Load initial snapshot of subscriptions
             info!("Snapshot of subscriptions loading");
-            use schema::realtime::subscription::dsl::*;
             let mut subscriptions = match subscription.load::<realtime_fmt::Subscription>(conn) {
                 Ok(subscriptions) => subscriptions,
                 Err(err) => {
@@ -489,7 +488,7 @@ fn process_record<'a>(
 mod tests {
     extern crate diesel;
     use crate::realtime_fmt::Subscription;
-    use crate::schema::realtime::subscription::dsl::*;
+    use crate::sql::schema::realtime::subscription::dsl::*;
     use crate::wal2json;
     use chrono::Utc;
     use diesel::prelude::*;
