@@ -196,6 +196,10 @@ fn process_record<'a>(
     max_record_bytes: usize,
     conn: &mut PgConnection,
 ) -> Result<Vec<realtime::WALRLS<'a>>, String> {
+    /*
+     *  Table Level Filters
+     */
+
     let is_in_publication =
         filters::table::publication::is_in_publication(&rec.schema, &rec.table, publication, conn)?;
 
@@ -227,8 +231,6 @@ fn process_record<'a>(
 
     let subscribed_roles: Vec<&String> = entity_subscriptions
         .iter()
-        .filter(|x| &x.schema_name == &rec.schema)
-        .filter(|x| &x.table_name == &rec.table)
         .map(|x| &x.claims_role_name)
         .unique()
         .collect();
@@ -259,6 +261,10 @@ fn process_record<'a>(
     }
 
     for role in subscribed_roles {
+        /*
+         *  Role Level Filters
+         */
+
         // Subscriptions to current entity + role
         let entity_role_subscriptions: Vec<&realtime::Subscription> = entity_subscriptions
             .iter()
@@ -284,6 +290,10 @@ fn process_record<'a>(
                 type_: w2j_col.type_,
             })
             .collect();
+
+        /*
+         *  Record Level Filters
+         */
 
         let mut record_elem = HashMap::new();
         let mut old_record_elem = None;
