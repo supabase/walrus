@@ -268,10 +268,10 @@ fn process_record<'a>(
     if action != realtime_fmt::Action::DELETE && !has_primary_key(rec) {
         let r = realtime_fmt::WALRLS {
             wal: realtime_fmt::Data {
-                schema: rec.schema.to_string(),
-                table: rec.table.to_string(),
+                schema: rec.schema,
+                table: rec.table,
                 r#type: action.clone(),
-                commit_timestamp: rec.timestamp,
+                commit_timestamp: &rec.timestamp,
                 columns: vec![],
                 record: HashMap::new(),
                 old_record: None,
@@ -281,7 +281,7 @@ fn process_record<'a>(
                 .iter()
                 .map(|x| x.subscription_id.clone())
                 .collect(),
-            errors: vec!["Error 400: Bad Request, no primary key".to_string()],
+            errors: vec!["Error 400: Bad Request, no primary key"],
         };
         result.push(r);
         return Ok(result);
@@ -318,10 +318,10 @@ fn process_record<'a>(
         if action != realtime_fmt::Action::DELETE && selectable_columns.len() == 0 {
             let r = realtime_fmt::WALRLS {
                 wal: realtime_fmt::Data {
-                    schema: rec.schema.to_string(),
-                    table: rec.table.to_string(),
+                    schema: rec.schema,
+                    table: rec.table,
                     r#type: action.clone(),
-                    commit_timestamp: rec.timestamp,
+                    commit_timestamp: &rec.timestamp,
                     columns,
                     record: HashMap::new(),
                     old_record: None,
@@ -331,16 +331,16 @@ fn process_record<'a>(
                     .iter()
                     .map(|x| x.subscription_id.clone())
                     .collect(),
-                errors: vec!["Error 401: Unauthorized".to_string()],
+                errors: vec!["Error 401: Unauthorized"],
             };
             result.push(r);
         } else {
             if vec![realtime_fmt::Action::INSERT, realtime_fmt::Action::UPDATE].contains(&action) {
                 for col_name in &selectable_columns {
                     'record: for col in rec.columns.as_ref().unwrap_or(&vec![]) {
-                        if col_name == &col.name {
+                        if col_name == col.name {
                             if !exceeds_max_size || col.value.to_string().len() < 64 {
-                                record_elem.insert(col_name.to_string(), col.value.clone());
+                                record_elem.insert(col.name, col.value.clone());
                                 break 'record;
                             }
                         }
@@ -353,10 +353,9 @@ fn process_record<'a>(
                     match &rec.identity {
                         Some(identity) => {
                             'old_record: for col in identity {
-                                if col_name == &col.name {
+                                if col_name == col.name {
                                     if !exceeds_max_size || col.value.to_string().len() < 64 {
-                                        old_record_elem_content
-                                            .insert(col_name.to_string(), col.value.clone());
+                                        old_record_elem_content.insert(col.name, col.value.clone());
                                         break 'old_record;
                                     }
                                 }
@@ -375,9 +374,9 @@ fn process_record<'a>(
                 .iter()
                 .map(|col| {
                     walrus_fmt::WALColumn {
-                        name: col.name.to_string(),
-                        type_name: col.type_.to_string(),
-                        type_oid: col.typeoid.clone(),
+                        name: col.name,
+                        type_name: col.type_,
+                        type_oid: col.typeoid,
                         value: col.value.clone(),
                         is_pkey: pkey_cols(rec).contains(&&col.name),
                         is_selectable: false, // stub: unused,
@@ -460,10 +459,10 @@ fn process_record<'a>(
 
             let r = realtime_fmt::WALRLS {
                 wal: realtime_fmt::Data {
-                    schema: rec.schema.to_string(),
-                    table: rec.table.to_string(),
+                    schema: rec.schema,
+                    table: rec.table,
                     r#type: action.clone(),
-                    commit_timestamp: rec.timestamp,
+                    commit_timestamp: &rec.timestamp,
                     columns,
                     record: record_elem,
                     old_record: old_record_elem,
@@ -475,7 +474,7 @@ fn process_record<'a>(
                     .unique()
                     .collect(),
                 errors: match exceeds_max_size {
-                    true => vec!["Error 413: Payload Too Large".to_string()],
+                    true => vec!["Error 413: Payload Too Large"],
                     false => vec![],
                 },
             };
