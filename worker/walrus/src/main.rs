@@ -192,9 +192,18 @@ fn run(args: &Args) -> Result<(), String> {
     }
 }
 
-fn pkey_cols(rec: &wal2json::Record) -> Vec<&String> {
+/*
+fn pkey_cols<'a>(rec: &'a wal2json::Record) -> Vec<&'a str> {
     match &rec.pk {
         Some(pkey_refs) => pkey_refs.iter().map(|x| &x.name).collect(),
+        None => vec![],
+    }
+}
+*/
+
+fn pkey_cols(rec: &wal2json::Record) -> Vec<String> {
+    match &rec.pk {
+        Some(pkey_refs) => pkey_refs.iter().map(|x| x.name.clone()).collect(),
         None => vec![],
     }
 }
@@ -498,6 +507,11 @@ mod tests {
     use serde_json::json;
     use uuid;
 
+    const BOOLOID: i32 = 16;
+    const INT4OID: u32 = 23;
+    const INT8OID: i32 = 20;
+    const TEXTOID: i32 = 25;
+
     fn establish_connection() -> PgConnection {
         let database_url = "postgresql://postgres:password@localhost:5501/postgres";
         PgConnection::establish(&database_url).unwrap()
@@ -542,10 +556,15 @@ mod tests {
             table: "notes".to_string(),
             pk: Some(vec![wal2json::PrimaryKeyRef {
                 name: "id".to_string(),
-                type_: "int4".to_string(), // todo
-                typeoid: 4,                // todo
+                type_: "int4".to_string(),
+                typeoid: INT4OID,
             }]),
-            columns: Some(vec![]),
+            columns: Some(vec![wal2json::Column {
+                name: "id".to_string(),
+                type_: "int4".to_string(),
+                typeoid: Some(INT4OID),
+                value: json!(1),
+            }]),
             identity: None,
             timestamp: Utc::now(),
         };

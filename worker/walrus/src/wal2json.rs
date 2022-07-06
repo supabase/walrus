@@ -16,7 +16,7 @@ pub struct PrimaryKeyRef {
     pub name: String,
     #[serde(alias = "type")]
     pub type_: String,
-    pub typeoid: i32,
+    pub typeoid: u32,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -30,7 +30,7 @@ pub enum Action {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Record {
     pub action: Action,
-    pub schema: String,
+    pub schema: String, //&str,
     pub table: String,
     pub pk: Option<Vec<PrimaryKeyRef>>,
     pub columns: Option<Vec<Column>>, // option is for truncate
