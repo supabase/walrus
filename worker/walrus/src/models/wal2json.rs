@@ -40,3 +40,16 @@ pub struct Record<'a> {
     #[serde(with = "crate::timestamp_fmt")]
     pub timestamp: DateTime<Utc>,
 }
+
+impl<'a> Record<'a> {
+    pub fn pkey_cols(&self) -> Vec<&'a str> {
+        match &self.pk {
+            Some(pkey_refs) => pkey_refs.iter().map(|x| x.name).collect(),
+            None => vec![],
+        }
+    }
+
+    pub fn has_primary_key(&self) -> bool {
+        self.pkey_cols().len() != 0
+    }
+}

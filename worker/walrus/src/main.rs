@@ -18,7 +18,6 @@ use std::time;
 mod filters;
 mod models;
 mod sql;
-mod sql_functions;
 mod timestamp_fmt;
 
 /// Write-Ahead-Log Realtime Unified Security (WALRUS) background worker
@@ -59,7 +58,7 @@ fn main() {
             }
             _ => continue,
         };
-        info!("Stream interrupted. Restarting pg_recvlogical in 5 seconds");
+        info!("Stream interrupted. Restarting in 5 seconds");
         sleep(time::Duration::from_secs(5));
     }
 }
@@ -190,17 +189,6 @@ fn run(args: &Args) -> Result<(), String> {
     }
 }
 
-fn pkey_cols<'a>(rec: &'a wal2json::Record) -> Vec<&'a str> {
-    match &rec.pk {
-        Some(pkey_refs) => pkey_refs.iter().map(|x| x.name).collect(),
-        None => vec![],
-    }
-}
-
-fn has_primary_key(rec: &wal2json::Record) -> bool {
-    pkey_cols(rec).len() != 0
-}
-
 fn process_record<'a>(
     rec: &'a wal2json::Record,
     subscriptions: &Vec<realtime::Subscription>,
@@ -254,7 +242,7 @@ fn process_record<'a>(
     let mut result: Vec<realtime::WALRLS> = vec![];
 
     // If the table has no primary key, return
-    if action != realtime::Action::DELETE && !has_primary_key(rec) {
+    if action != realtime::Action::DELETE && !rec.has_primary_key() {
         let r = realtime::WALRLS {
             wal: realtime::Data {
                 schema: rec.schema,
@@ -284,8 +272,12 @@ fn process_record<'a>(
             .map(|x| *x)
             .collect();
 
-        let selectable_columns =
-            sql_functions::selectable_columns(&rec.schema, &rec.table, role, conn)?;
+        let selectable_columns = filters::table::column_security::selectable_columns(
+            &rec.schema,
+            &rec.table,
+            role,
+            conn,
+        )?;
 
         let columns = rec
             .columns
@@ -367,7 +359,7 @@ fn process_record<'a>(
                         type_name: col.type_,
                         type_oid: col.typeoid,
                         value: col.value.clone(),
-                        is_pkey: pkey_cols(rec).contains(&&col.name),
+                        is_pkey: rec.pkey_cols().contains(&col.name),
                         is_selectable: false, // stub: unused,
                     }
                 })
