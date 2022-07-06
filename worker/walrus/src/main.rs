@@ -217,13 +217,7 @@ fn process_record<'a>(
     );
 
     let exceeds_max_size = serde_json::json!(rec).to_string().len() > max_record_bytes;
-
-    let action = match rec.action {
-        wal2json::Action::I => realtime::Action::INSERT,
-        wal2json::Action::U => realtime::Action::UPDATE,
-        wal2json::Action::D => realtime::Action::DELETE,
-        wal2json::Action::T => realtime::Action::TRUNCATE,
-    };
+    let action = realtime::Action::from_wal2json(&rec.action);
 
     // If the table isn't in the publication or no one is subscribed, do no work
     if !(is_in_publication && is_subscribed_to && action != realtime::Action::TRUNCATE) {

@@ -1,5 +1,5 @@
+use crate::models::wal2json;
 use crate::sql::schema::realtime::subscription::dsl::*;
-use crate::wal2json;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use diesel::deserialize::{self, FromSql};
 use diesel::pg::{Pg, PgValue};
@@ -19,6 +19,17 @@ pub enum Action {
     UPDATE,
     DELETE,
     TRUNCATE,
+}
+
+impl Action {
+    pub fn from_wal2json(action: &wal2json::Action) -> Self {
+        match action {
+            wal2json::Action::I => Self::INSERT,
+            wal2json::Action::U => Self::UPDATE,
+            wal2json::Action::D => Self::DELETE,
+            wal2json::Action::T => Self::TRUNCATE,
+        }
+    }
 }
 
 #[derive(Serialize, Clone, Debug, Eq, PartialEq)]
