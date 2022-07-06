@@ -1,3 +1,4 @@
+use crate::models::walrus;
 use cached::proc_macro::cached;
 use cached::TimedSizedCache;
 use diesel::*;
@@ -91,7 +92,7 @@ pub fn selectable_columns(
 }
 
 pub fn is_visible_through_filters(
-    columns: &Vec<crate::walrus_fmt::WALColumn>,
+    columns: &Vec<walrus::WALColumn>,
     ids: &Vec<i64>,
     // TODO: convert this to use subscription_ids to reduce n calls
     conn: &mut PgConnection,
@@ -107,7 +108,7 @@ pub fn is_visible_through_filters(
 pub fn is_visible_through_rls(
     schema_name: &str,
     table_name: &str,
-    columns: &Vec<crate::walrus_fmt::WALColumn>,
+    columns: &Vec<walrus::WALColumn>,
     ids: &Vec<i64>,
     conn: &mut PgConnection,
 ) -> Result<Vec<i64>, String> {

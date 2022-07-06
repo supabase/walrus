@@ -6,6 +6,7 @@ use diesel::*;
 use env_logger;
 use itertools::Itertools;
 use log::{debug, error, info, warn};
+use models::{realtime, wal2json, walrus};
 use serde_json;
 use sql::schema::realtime::subscription::dsl::*;
 use std::collections::HashMap;
@@ -15,12 +16,10 @@ use std::thread::sleep;
 use std::time;
 
 mod filters;
-mod realtime_fmt;
+mod models;
 mod sql;
 mod sql_functions;
 mod timestamp_fmt;
-mod wal2json;
-mod walrus_fmt;
 
 /// Write-Ahead-Log Realtime Unified Security (WALRUS) background worker
 /// runs next to a PostgreSQL instance and forwards its Write-Ahead-Log
@@ -119,7 +118,7 @@ fn run(args: &Args) -> Result<(), String> {
 
             // Load initial snapshot of subscriptions
             info!("Snapshot of subscriptions loading");
-            let mut subscriptions = match subscription.load::<realtime_fmt::Subscription>(conn) {
+            let mut subscriptions = match subscription.load::<realtime::Subscription>(conn) {
                 Ok(subscriptions) => subscriptions,
                 Err(err) => {
                     cmd.kill().unwrap();
@@ -138,7 +137,7 @@ fn run(args: &Args) -> Result<(), String> {
                             Ok(wal2json_record) => {
                                 //println!("rec {:?}", wal2json_record);
                                 // Update subscriptions if needed
-                                realtime_fmt::update_subscriptions(
+                                realtime::update_subscriptions(
                                     &wal2json_record,
                                     &mut subscriptions,
                                     conn,
@@ -204,16 +203,16 @@ fn has_primary_key(rec: &wal2json::Record) -> bool {
 
 fn process_record<'a>(
     rec: &'a wal2json::Record,
-    subscriptions: &Vec<realtime_fmt::Subscription>,
+    subscriptions: &Vec<realtime::Subscription>,
     publication: &str,
     max_record_bytes: usize,
     conn: &mut PgConnection,
-) -> Result<Vec<realtime_fmt::WALRLS<'a>>, String> {
+) -> Result<Vec<realtime::WALRLS<'a>>, String> {
     let is_in_publication =
         sql_functions::is_in_publication(&rec.schema, &rec.table, publication, conn)?;
 
     // Subscriptions to the current entity
-    let entity_subscriptions: Vec<&realtime_fmt::Subscription> = subscriptions
+    let entity_subscriptions: Vec<&realtime::Subscription> = subscriptions
         .iter()
         .filter(|x| &x.schema_name == &rec.schema)
         .filter(|x| &x.table_name == &rec.table)
@@ -241,14 +240,14 @@ fn process_record<'a>(
     let exceeds_max_size = serde_json::json!(rec).to_string().len() > max_record_bytes;
 
     let action = match rec.action {
-        wal2json::Action::I => realtime_fmt::Action::INSERT,
-        wal2json::Action::U => realtime_fmt::Action::UPDATE,
-        wal2json::Action::D => realtime_fmt::Action::DELETE,
-        wal2json::Action::T => realtime_fmt::Action::TRUNCATE,
+        wal2json::Action::I => realtime::Action::INSERT,
+        wal2json::Action::U => realtime::Action::UPDATE,
+        wal2json::Action::D => realtime::Action::DELETE,
+        wal2json::Action::T => realtime::Action::TRUNCATE,
     };
 
     // If the table isn't in the publication or no one is subscribed, do no work
-    if !(is_in_publication && is_subscribed_to && action != realtime_fmt::Action::TRUNCATE) {
+    if !(is_in_publication && is_subscribed_to && action != realtime::Action::TRUNCATE) {
         debug!("Early exit. Not in pub or no one listening");
         return Ok(vec![]);
     }
@@ -261,12 +260,12 @@ fn process_record<'a>(
         .unique()
         .collect();
 
-    let mut result: Vec<realtime_fmt::WALRLS> = vec![];
+    let mut result: Vec<realtime::WALRLS> = vec![];
 
     // If the table has no primary key, return
-    if action != realtime_fmt::Action::DELETE && !has_primary_key(rec) {
-        let r = realtime_fmt::WALRLS {
-            wal: realtime_fmt::Data {
+    if action != realtime::Action::DELETE && !has_primary_key(rec) {
+        let r = realtime::WALRLS {
+            wal: realtime::Data {
                 schema: rec.schema,
                 table: rec.table,
                 r#type: action.clone(),
@@ -288,7 +287,7 @@ fn process_record<'a>(
 
     for role in subscribed_roles {
         // Subscriptions to current entity + role
-        let entity_role_subscriptions: Vec<&realtime_fmt::Subscription> = entity_subscriptions
+        let entity_role_subscriptions: Vec<&realtime::Subscription> = entity_subscriptions
             .iter()
             .filter(|x| &x.claims_role_name == role)
             .map(|x| *x)
@@ -303,7 +302,7 @@ fn process_record<'a>(
             .unwrap_or(&vec![])
             .iter()
             .filter(|col| selectable_columns.contains(&col.name.to_string()))
-            .map(|w2j_col| realtime_fmt::Column {
+            .map(|w2j_col| realtime::Column {
                 name: w2j_col.name,
                 type_: w2j_col.type_,
             })
@@ -314,9 +313,9 @@ fn process_record<'a>(
         let mut old_record_elem_content = HashMap::new();
 
         // If the role can not select any columns in the table, return
-        if action != realtime_fmt::Action::DELETE && selectable_columns.len() == 0 {
-            let r = realtime_fmt::WALRLS {
-                wal: realtime_fmt::Data {
+        if action != realtime::Action::DELETE && selectable_columns.len() == 0 {
+            let r = realtime::WALRLS {
+                wal: realtime::Data {
                     schema: rec.schema,
                     table: rec.table,
                     r#type: action.clone(),
@@ -334,7 +333,7 @@ fn process_record<'a>(
             };
             result.push(r);
         } else {
-            if vec![realtime_fmt::Action::INSERT, realtime_fmt::Action::UPDATE].contains(&action) {
+            if vec![realtime::Action::INSERT, realtime::Action::UPDATE].contains(&action) {
                 for col_name in &selectable_columns {
                     'record: for col in rec.columns.as_ref().unwrap_or(&vec![]) {
                         if col_name == col.name {
@@ -347,7 +346,7 @@ fn process_record<'a>(
                 }
             }
 
-            if vec![realtime_fmt::Action::UPDATE, realtime_fmt::Action::DELETE].contains(&action) {
+            if vec![realtime::Action::UPDATE, realtime::Action::DELETE].contains(&action) {
                 for col_name in &selectable_columns {
                     match &rec.identity {
                         Some(identity) => {
@@ -366,13 +365,13 @@ fn process_record<'a>(
                 old_record_elem = Some(old_record_elem_content);
             }
 
-            let walcols: Vec<walrus_fmt::WALColumn> = rec
+            let walcols: Vec<walrus::WALColumn> = rec
                 .columns
                 .as_ref()
                 .unwrap_or(&vec![])
                 .iter()
                 .map(|col| {
-                    walrus_fmt::WALColumn {
+                    walrus::WALColumn {
                         name: col.name,
                         type_name: col.type_,
                         type_oid: col.typeoid,
@@ -429,10 +428,9 @@ fn process_record<'a>(
             }
 
             // Row Level Security
-            let subscriptions_to_notify: Vec<&realtime_fmt::Subscription> = match is_rls_enabled
+            let subscriptions_to_notify: Vec<&realtime::Subscription> = match is_rls_enabled
                 && visible_through_filters.len() > 0
-                && !vec![realtime_fmt::Action::DELETE, realtime_fmt::Action::TRUNCATE]
-                    .contains(&action)
+                && !vec![realtime::Action::DELETE, realtime::Action::TRUNCATE].contains(&action)
             {
                 false => visible_through_filters,
                 true => {
@@ -456,8 +454,8 @@ fn process_record<'a>(
                 }
             };
 
-            let r = realtime_fmt::WALRLS {
-                wal: realtime_fmt::Data {
+            let r = realtime::WALRLS {
+                wal: realtime::Data {
                     schema: rec.schema,
                     table: rec.table,
                     r#type: action.clone(),
@@ -487,7 +485,7 @@ fn process_record<'a>(
 #[cfg(test)]
 mod tests {
     extern crate diesel;
-    use crate::realtime_fmt::Subscription;
+    use crate::realtime::Subscription;
     use crate::sql::schema::realtime::subscription::dsl::*;
     use crate::wal2json;
     use chrono::Utc;

@@ -1,5 +1,4 @@
-use crate::realtime_fmt::UserDefinedFilter;
-use crate::wal2json::Column;
+use crate::models::{realtime, wal2json};
 use log::warn;
 
 fn is_null(v: &serde_json::Value) -> bool {
@@ -7,10 +6,10 @@ fn is_null(v: &serde_json::Value) -> bool {
 }
 
 pub fn visible_through_filters(
-    filters: &Vec<UserDefinedFilter>,
-    columns: &Vec<Column>,
+    filters: &Vec<realtime::UserDefinedFilter>,
+    columns: &Vec<wal2json::Column>,
 ) -> Result<bool, String> {
-    use crate::realtime_fmt::Op;
+    use realtime::Op;
 
     for filter in filters {
         let filter_value: serde_json::Value = match serde_json::from_str(&filter.value) {
@@ -73,11 +72,11 @@ pub fn visible_through_filters(
     Ok(true)
 }
 
-/// Returns a vector of realtime_fmt::Op that match for a OP b
+/// Returns a vector of realtime::Op that match for a OP b
 fn get_valid_ops(
     a: &serde_json::Value,
     b: &serde_json::Value,
-) -> Result<Vec<crate::realtime_fmt::Op>, String> {
+) -> Result<Vec<crate::realtime::Op>, String> {
     use serde_json::Value;
 
     match (a, b) {
@@ -91,11 +90,11 @@ fn get_valid_ops(
     }
 }
 
-fn get_matching_ops<T>(a: &T, b: &T) -> Vec<crate::realtime_fmt::Op>
+fn get_matching_ops<T>(a: &T, b: &T) -> Vec<crate::realtime::Op>
 where
     T: PartialEq + PartialOrd,
 {
-    use crate::realtime_fmt::Op;
+    use realtime::Op;
     let mut ops = vec![];
 
     if a == b {

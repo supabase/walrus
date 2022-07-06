@@ -5,7 +5,7 @@ pub mod realtime {
             subscription_id -> Uuid,
             entity -> Int4,
             //filters -> Array<Record<(Text, crate::realtime_fmt::EqualityOpType, Text)>>,
-            filters -> Array<crate::realtime_fmt::UserDefinedFilterType>,
+            filters -> Array<crate::models::realtime::UserDefinedFilterType>,
             claims -> Jsonb,
             claims_role -> Int4,
             created_at -> Timestamp,
