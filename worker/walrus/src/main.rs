@@ -192,18 +192,9 @@ fn run(args: &Args) -> Result<(), String> {
     }
 }
 
-/*
 fn pkey_cols<'a>(rec: &'a wal2json::Record) -> Vec<&'a str> {
     match &rec.pk {
-        Some(pkey_refs) => pkey_refs.iter().map(|x| &x.name).collect(),
-        None => vec![],
-    }
-}
-*/
-
-fn pkey_cols(rec: &wal2json::Record) -> Vec<String> {
-    match &rec.pk {
-        Some(pkey_refs) => pkey_refs.iter().map(|x| x.name.clone()).collect(),
+        Some(pkey_refs) => pkey_refs.iter().map(|x| x.name).collect(),
         None => vec![],
     }
 }
@@ -212,13 +203,13 @@ fn has_primary_key(rec: &wal2json::Record) -> bool {
     pkey_cols(rec).len() != 0
 }
 
-fn process_record(
-    rec: &wal2json::Record,
+fn process_record<'a>(
+    rec: &'a wal2json::Record,
     subscriptions: &Vec<realtime_fmt::Subscription>,
     publication: &str,
     max_record_bytes: usize,
     conn: &mut PgConnection,
-) -> Result<Vec<realtime_fmt::WALRLS>, String> {
+) -> Result<Vec<realtime_fmt::WALRLS<'a>>, String> {
     let is_in_publication =
         sql_functions::is_in_publication(&rec.schema, &rec.table, publication, conn)?;
 
@@ -312,10 +303,10 @@ fn process_record(
             .as_ref()
             .unwrap_or(&vec![])
             .iter()
-            .filter(|col| selectable_columns.contains(&col.name))
+            .filter(|col| selectable_columns.contains(&col.name.to_string()))
             .map(|w2j_col| realtime_fmt::Column {
-                name: w2j_col.name.to_string(),
-                type_: w2j_col.type_.to_string(),
+                name: w2j_col.name,
+                type_: w2j_col.type_,
             })
             .collect();
 
@@ -552,16 +543,16 @@ mod tests {
 
         let rec = wal2json::Record {
             action: wal2json::Action::I,
-            schema: "public".to_string(),
-            table: "notes".to_string(),
+            schema: "public",
+            table: "notes",
             pk: Some(vec![wal2json::PrimaryKeyRef {
-                name: "id".to_string(),
-                type_: "int4".to_string(),
+                name: "id",
+                type_: "int4",
                 typeoid: INT4OID,
             }]),
             columns: Some(vec![wal2json::Column {
-                name: "id".to_string(),
-                type_: "int4".to_string(),
+                name: "id",
+                type_: "int4",
                 typeoid: Some(INT4OID),
                 value: json!(1),
             }]),

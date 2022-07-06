@@ -12,7 +12,7 @@ use std::io::Write;
 use std::*;
 use uuid;
 
-#[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq)]
+#[derive(Serialize, Clone, Debug, Eq, PartialEq)]
 pub enum Action {
     INSERT,
     UPDATE,
@@ -20,28 +20,28 @@ pub enum Action {
     TRUNCATE,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq)]
-pub struct Column {
-    pub name: String,
+#[derive(Serialize, Clone, Debug, Eq, PartialEq)]
+pub struct Column<'a> {
+    pub name: &'a str,
     #[serde(rename(serialize = "type", deserialize = "type"))]
-    pub type_: String,
+    pub type_: &'a str,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq)]
-pub struct Data {
+#[derive(Serialize, Clone, Debug, Eq, PartialEq)]
+pub struct Data<'a> {
     pub schema: String,
     pub table: String,
     pub r#type: Action,
     #[serde(with = "crate::timestamp_fmt")]
     pub commit_timestamp: DateTime<Utc>,
-    pub columns: Vec<Column>,
+    pub columns: Vec<Column<'a>>,
     pub record: HashMap<String, serde_json::Value>,
     pub old_record: Option<HashMap<String, serde_json::Value>>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq)]
-pub struct WALRLS {
-    pub wal: Data,
+#[derive(Serialize, Clone, Debug, Eq, PartialEq)]
+pub struct WALRLS<'a> {
+    pub wal: Data<'a>,
     pub is_rls_enabled: bool,
     pub subscription_ids: Vec<uuid::Uuid>,
     pub errors: Vec<String>,
