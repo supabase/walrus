@@ -3,7 +3,7 @@ pub mod realtime {
         realtime.subscription (id) {
             id -> Int8,
             subscription_id -> Uuid,
-            entity -> Int4,
+            entity -> Oid,
             //filters -> Array<Record<(Text, crate::realtime_fmt::EqualityOpType, Text)>>,
             filters -> Array<crate::models::realtime::UserDefinedFilterType>,
             claims -> Jsonb,

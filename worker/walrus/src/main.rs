@@ -472,52 +472,25 @@ fn process_record<'a>(
 #[cfg(test)]
 mod tests {
     extern crate diesel;
+    use crate::models::{realtime, wal2json};
     use crate::realtime::Subscription;
     use crate::sql::schema::realtime::subscription::dsl::*;
-    use crate::wal2json;
-    use chrono::Utc;
+    use chrono::{TimeZone, Utc};
     use diesel::prelude::*;
     use diesel::*;
+    use pretty_assertions::assert_eq;
     use serde_json::json;
+    use std::collections::HashMap;
     use uuid;
 
     //const BOOLOID: i32 = 16;
-    const INT4OID: u32 = 23;
+    const INTEGER_OID: u32 = 23;
     //const INT8OID: i32 = 20;
     //const TEXTOID: i32 = 25;
 
     fn establish_connection() -> PgConnection {
         let database_url = "postgresql://postgres:password@localhost:5501/postgres";
         PgConnection::establish(&database_url).unwrap()
-    }
-
-    fn clean(conn: &mut PgConnection) {
-        delete(subscription).execute(conn).unwrap();
-    }
-
-    #[test]
-    fn test_basic() {
-        let mut conn = establish_connection();
-
-        let claim_sub = uuid::Uuid::new_v4();
-
-        insert_into(subscription)
-            .values((
-                subscription_id.eq(uuid::Uuid::new_v4()),
-                entity.eq(16487),
-                claims.eq(json!({
-                    "role": "postgres",
-                    "email": "example@example.com",
-                    "sub": claim_sub
-                })),
-            ))
-            .execute(&mut conn)
-            .unwrap();
-
-        let subscriptions = subscription.load::<Subscription>(&mut conn).unwrap();
-        clean(&mut conn);
-
-        assert_eq!(subscriptions.len(), 1);
     }
 
     #[test]
@@ -531,12 +504,12 @@ mod tests {
             pk: Some(vec![wal2json::PrimaryKeyRef {
                 name: "id",
                 type_: "int4",
-                typeoid: INT4OID,
+                typeoid: INTEGER_OID,
             }]),
             columns: Some(vec![wal2json::Column {
                 name: "id",
                 type_: "int4",
-                typeoid: Some(INT4OID),
+                typeoid: Some(INTEGER_OID),
                 value: json!(1),
             }]),
             identity: None,
@@ -553,5 +526,156 @@ mod tests {
         .unwrap();
 
         assert_eq!(res, vec![]);
+    }
+
+    #[test]
+    fn test_simple_subscriber() {
+        let mut conn = establish_connection();
+
+        crate::sql::migrations::run_migrations(&mut conn)
+            .expect("Pending migrations failed to execute");
+
+        diesel::sql_query(
+            "
+        DO
+            $do$
+            BEGIN
+               IF EXISTS (
+                 SELECT FROM pg_catalog.pg_roles
+                   WHERE  rolname = 'authenticated') THEN
+                     RAISE NOTICE 'Role authenticated already exists. Skipping.';
+                   ELSE
+                     CREATE ROLE authenticated;
+               END IF;
+             END
+             $do$;",
+        )
+        .execute(&mut conn)
+        .unwrap();
+
+        diesel::sql_query("create schema if not exists auth;")
+            .execute(&mut conn)
+            .unwrap();
+
+        diesel::sql_query(
+            "
+            create or replace function auth.uid()
+                returns uuid
+                language 'sql'
+            AS $$
+              select
+                coalesce(
+                    nullif(current_setting('request.jwt.claim.sub', true), ''),
+                    (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')
+                )::uuid
+            $$;
+            ",
+        )
+        .execute(&mut conn)
+        .unwrap();
+
+        diesel::sql_query("grant all on schema auth to authenticated;")
+            .execute(&mut conn)
+            .unwrap();
+
+        diesel::sql_query("truncate table realtime.subscription;")
+            .execute(&mut conn)
+            .unwrap();
+
+        diesel::sql_query(
+            "create table if not exists public.notes(id int primary key, body text);",
+        )
+        .execute(&mut conn)
+        .unwrap();
+
+        diesel::sql_query("truncate table public.notes;")
+            .execute(&mut conn)
+            .unwrap();
+
+        diesel::sql_query("drop publication if exists supabase_multiplayer;")
+            .execute(&mut conn)
+            .unwrap();
+        diesel::sql_query("create publication supabase_multiplayer for all tables;")
+            .execute(&mut conn)
+            .unwrap();
+
+        diesel::sql_query("insert into public.notes(id, body) values ( 1, 'hello world') ;")
+            .execute(&mut conn)
+            .unwrap();
+
+        let notes_oid =
+            crate::filters::table::table_oid::get_table_oid("public", "notes", &mut conn).unwrap();
+
+        let claim_sub = uuid::Uuid::new_v4();
+        let sub_id = uuid::uuid!("37c7e506-9eca-4671-8c48-526d404660ce");
+
+        insert_into(subscription)
+            .values((
+                subscription_id.eq(sub_id),
+                entity.eq(notes_oid),
+                claims.eq(json!({
+                    "role": "postgres",
+                    "email": "example@example.com",
+                    "sub": claim_sub
+                })),
+            ))
+            .execute(&mut conn)
+            .unwrap();
+
+        let subscriptions = subscription.load::<Subscription>(&mut conn).unwrap();
+
+        let note_id: i32 = 1;
+        let ts = Utc.timestamp(61, 0);
+
+        let rec = wal2json::Record {
+            action: wal2json::Action::I,
+            schema: "public",
+            table: "notes",
+            pk: Some(vec![wal2json::PrimaryKeyRef {
+                name: "id",
+                type_: "int4",
+                typeoid: INTEGER_OID,
+            }]),
+            columns: Some(vec![wal2json::Column {
+                name: "id",
+                type_: "integer",
+                typeoid: Some(INTEGER_OID),
+                value: json!(note_id),
+            }]),
+            identity: None,
+            timestamp: ts,
+        };
+
+        let res = crate::process_record(
+            &rec,
+            &subscriptions,
+            "supabase_multiplayer",
+            1024 * 1024,
+            &mut conn,
+        )
+        .unwrap();
+
+        assert!(res.len() == 1);
+        assert!(res[0].subscription_ids.len() == 1);
+
+        let expected = vec![realtime::WALRLS {
+            wal: realtime::Data {
+                schema: "public",
+                table: "notes",
+                r#type: realtime::Action::INSERT,
+                commit_timestamp: &ts,
+                columns: vec![realtime::Column {
+                    name: "id",
+                    type_: "integer",
+                }],
+                record: HashMap::from([("id", json!(note_id))]),
+                old_record: None,
+            },
+            is_rls_enabled: false,
+            subscription_ids: vec![sub_id],
+            errors: vec![],
+        }];
+
+        assert_eq!(res, expected);
     }
 }

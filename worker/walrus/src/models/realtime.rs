@@ -64,7 +64,7 @@ pub struct WALRLS<'a> {
 pub struct Subscription {
     pub id: i64,
     pub subscription_id: uuid::Uuid,
-    pub entity: i32,
+    pub entity: u32,
     // This also works for anonymous deser of filters (schema.rs also must change)
     //pub filters: Vec<(String, EqualityOp, String)>,
     pub filters: Vec<UserDefinedFilter>,

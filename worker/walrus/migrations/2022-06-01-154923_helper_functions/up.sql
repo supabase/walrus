@@ -252,6 +252,18 @@ begin
 end;
 $$;
 
+
+create function realtime.get_table_oid(
+    schema_name text,
+    table_name text
+)
+    returns oid
+    language sql
+as $$
+    select format('%I.%I', schema_name, table_name)::regclass::oid;
+$$;
+
+
 alter table realtime.subscription add column schema_name text generated always as (realtime.to_schema_name(entity)) stored;
 alter table realtime.subscription add column table_name text generated always as (realtime.to_table_name(entity)) stored;
 alter table realtime.subscription add column claims_role_name text generated always as (realtime.to_regrole((claims ->> 'role'::text))) stored;
