@@ -209,7 +209,7 @@ fn process_record<'a>(
     conn: &mut PgConnection,
 ) -> Result<Vec<realtime::WALRLS<'a>>, String> {
     let is_in_publication =
-        sql_functions::is_in_publication(&rec.schema, &rec.table, publication, conn)?;
+        filters::table::publication::is_in_publication(&rec.schema, &rec.table, publication, conn)?;
 
     // Subscriptions to the current entity
     let entity_subscriptions: Vec<&realtime::Subscription> = subscriptions
@@ -219,18 +219,9 @@ fn process_record<'a>(
         .map(|x| x)
         .collect();
 
-    if subscriptions.len() > 0 {
-        debug!(
-            "Rec {} {} table {} {}",
-            &rec.schema,
-            &rec.table,
-            &subscriptions.first().unwrap().schema_name,
-            &subscriptions.first().unwrap().table_name,
-        );
-    }
-
     let is_subscribed_to = entity_subscriptions.len() > 0;
-    let is_rls_enabled = sql_functions::is_rls_enabled(&rec.schema, &rec.table, conn)?;
+    let is_rls_enabled =
+        filters::table::row_level_security::is_rls_enabled(&rec.schema, &rec.table, conn)?;
 
     debug!(
         "Processing record: {}.{} inpub: {}, entity_subs {}, rls_on {}",
@@ -387,7 +378,7 @@ fn process_record<'a>(
             let mut delegate_to_sql_filters = vec![];
 
             for sub in entity_role_subscriptions {
-                match filters::visible_through_filters(
+                match filters::record::user_defined::visible_through_filters(
                     &sub.filters,
                     rec.columns.as_ref().unwrap_or(&vec![]),
                 ) {
@@ -408,7 +399,7 @@ fn process_record<'a>(
             }
 
             if delegate_to_sql_filters.len() > 0 {
-                match sql_functions::is_visible_through_filters(
+                match filters::record::user_defined::is_visible_through_filters_sql(
                     &walcols,
                     &delegate_to_sql_filters.iter().map(|x| x.id).collect(),
                     conn,
@@ -434,7 +425,7 @@ fn process_record<'a>(
             {
                 false => visible_through_filters,
                 true => {
-                    match sql_functions::is_visible_through_rls(
+                    match filters::record::row_level_security::is_visible_through_rls(
                         &rec.schema,
                         &rec.table,
                         &walcols,
@@ -494,10 +485,10 @@ mod tests {
     use serde_json::json;
     use uuid;
 
-    const BOOLOID: i32 = 16;
+    //const BOOLOID: i32 = 16;
     const INT4OID: u32 = 23;
-    const INT8OID: i32 = 20;
-    const TEXTOID: i32 = 25;
+    //const INT8OID: i32 = 20;
+    //const TEXTOID: i32 = 25;
 
     fn establish_connection() -> PgConnection {
         let database_url = "postgresql://postgres:password@localhost:5501/postgres";
