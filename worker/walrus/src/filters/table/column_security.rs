@@ -1,34 +1,37 @@
+use crate::models::realtime;
 use cached::proc_macro::cached;
 use cached::TimedSizedCache;
 use diesel::*;
 
-pub mod sql_functions {
+pub mod sql {
     use diesel::sql_types::*;
     use diesel::*;
 
     sql_function! {
         #[sql_name = "realtime.selectable_columns"]
-        fn selectable_columns(schema_name: Text, table_name: Text, role_name: Text) -> Array<Text>;
+        fn selectable_columns(table_oid: Oid, role_name: Text) -> Array<Jsonb>;
     }
 }
 
 #[cached(
-    type = "TimedSizedCache<String, Result<Vec<String>, String>>",
+    type = "TimedSizedCache<String, Result<Vec<realtime::Column>, String>>",
     create = "{ TimedSizedCache::with_size_and_lifespan(500, 1)}",
-    convert = r#"{ format!("{}.{}-{}", schema_name, table_name, role_name) }"#,
+    convert = r#"{ format!("{}-{}", table_oid, role_name) }"#,
     sync_writes = true
 )]
 pub fn selectable_columns(
-    schema_name: &str,
-    table_name: &str,
+    table_oid: u32,
     role_name: &str,
     conn: &mut PgConnection,
-) -> Result<Vec<String>, String> {
-    select(sql_functions::selectable_columns(
-        schema_name,
-        table_name,
-        role_name,
-    ))
-    .first(conn)
-    .map_err(|x| format!("{}", x))
+) -> Result<Vec<realtime::Column>, String> {
+    let cols_as_json: Vec<serde_json::Value> =
+        select(sql::selectable_columns(table_oid, role_name))
+            .first(conn)
+            .map_err(|x| format!("{}", x))?;
+
+    let r: Result<Vec<realtime::Column>, String> = cols_as_json
+        .into_iter()
+        .map(|col_json| serde_json::from_value(col_json).map_err(|x| format!("{}", x)))
+        .collect();
+    r
 }

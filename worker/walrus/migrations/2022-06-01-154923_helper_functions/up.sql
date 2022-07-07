@@ -51,31 +51,36 @@ as $$
     limit 1
 $$;
 
+
 create function realtime.selectable_columns(
-    schema_name text,
-    table_name text,
+    table_oid oid,
     role_name text
 )
-    returns text[]
+    returns jsonb[]
     language sql
 as $$
     select
         coalesce(
             array_agg(
-                pa.attname::text
+                jsonb_build_object(
+                    'name', pa.attname::text,
+                    'type', pt.typname::text
+                )
                 order by pa.attnum asc
             ),
-            array['abc']
+            array[]::jsonb[]
         )
     from
         pg_class e
         join pg_attribute pa
             on e.oid = pa.attrelid
+        join pg_type pt
+            on pa.atttypid = pt.oid
     where
-        e.oid = format('%I.%I', $1, $2)::regclass
+        e.oid = table_oid --format('%I.%I', $1, $2)::regclass
         and pa.attnum > 0
+        and pg_catalog.has_column_privilege(role_name, table_oid, pa.attname, 'SELECT')
         and not pa.attisdropped
-
 $$;
 
 
@@ -262,7 +267,6 @@ create function realtime.get_table_oid(
 as $$
     select format('%I.%I', schema_name, table_name)::regclass::oid;
 $$;
-
 
 alter table realtime.subscription add column schema_name text generated always as (realtime.to_schema_name(entity)) stored;
 alter table realtime.subscription add column table_name text generated always as (realtime.to_table_name(entity)) stored;

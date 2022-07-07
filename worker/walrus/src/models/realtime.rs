@@ -32,11 +32,11 @@ impl Action {
     }
 }
 
-#[derive(Serialize, Clone, Debug, Eq, PartialEq)]
-pub struct Column<'a> {
-    pub name: &'a str,
+#[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq)]
+pub struct Column {
+    pub name: String,
     #[serde(rename(serialize = "type", deserialize = "type"))]
-    pub type_: &'a str,
+    pub type_: String,
 }
 
 #[derive(Serialize, Clone, Debug, Eq, PartialEq)]
@@ -46,7 +46,7 @@ pub struct Data<'a> {
     pub r#type: Action,
     #[serde(with = "crate::timestamp_fmt")]
     pub commit_timestamp: &'a DateTime<Utc>,
-    pub columns: Vec<Column<'a>>,
+    pub columns: Vec<Column>,
     pub record: HashMap<&'a str, serde_json::Value>,
     pub old_record: Option<HashMap<&'a str, serde_json::Value>>,
 }
