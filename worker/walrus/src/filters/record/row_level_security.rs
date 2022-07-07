@@ -14,7 +14,7 @@ pub mod sql {
 pub fn is_visible_through_rls(
     schema_name: &str,
     table_name: &str,
-    columns: &Vec<walrus::WALColumn>,
+    columns: &Vec<walrus::Column>,
     ids: &Vec<i64>,
     conn: &mut PgConnection,
 ) -> Result<Vec<i64>, String> {
