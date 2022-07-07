@@ -124,7 +124,7 @@ $$
         case
             when maybe_quoted_name like '"%"' then substring(
                 maybe_quoted_name,
-                1,
+                2,
                 character_length(maybe_quoted_name)-2
             )
             else maybe_quoted_name

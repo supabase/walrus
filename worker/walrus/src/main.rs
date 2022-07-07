@@ -529,9 +529,16 @@ mod tests {
     }
 
     fn grant_all_on_schema(schema: &str, role: &str, conn: &mut PgConnection) {
-        diesel::sql_query(format!("grant all on schema {} to {};", schema, role))
+        diesel::sql_query(format!("grant all on schema \"{}\" to {};", schema, role))
             .execute(conn)
             .unwrap();
+
+        diesel::sql_query(format!(
+            "grant select on all tables in schema \"{}\" to {};",
+            schema, role
+        ))
+        .execute(conn)
+        .unwrap();
     }
 
     fn truncate(schema: &str, table: &str, conn: &mut PgConnection) {
@@ -941,6 +948,114 @@ mod tests {
             is_rls_enabled: false,
             subscription_ids: vec![sub_id],
             errors: vec!["Error 401: Unauthorized"],
+        }];
+
+        assert_eq!(walrus_output, expected);
+    }
+
+    #[test]
+    fn test_quoted_type_schema_and_table() {
+        // TODO: Enable RLS to make sure that works
+        // TODO: Add user defined filter to make sure delegate to sql works
+
+        let mut conn = establish_connection();
+        crate::sql::migrations::run_migrations(&mut conn)
+            .expect("Pending migrations failed to execute");
+        create_auth_schema(&mut conn);
+        truncate("realtime", "subscription", &mut conn);
+        create_publication_for_all_tables("supabase_multiplayer", &mut conn);
+
+        diesel::sql_query("create schema if not exists \"dEv\";")
+            .execute(&mut conn)
+            .unwrap();
+
+        diesel::sql_query("drop type if exists \"Color\" cascade;")
+            .execute(&mut conn)
+            .unwrap();
+        diesel::sql_query("create type \"Color\" as enum ('RED', 'YELLOW', 'GREEN');")
+            .execute(&mut conn)
+            .unwrap();
+
+        drop_table("dEv", "Notes7", &mut conn);
+        diesel::sql_query(
+            "create table if not exists \"dEv\".\"Notes7\"(id \"Color\" primary key);",
+        )
+        .execute(&mut conn)
+        .unwrap();
+
+        use diesel::dsl::sql;
+
+        let type_oid =
+            sql::<sql_types::Oid>("select oid from pg_type where typname = 'Color' limit 1")
+                .get_result::<u32>(&mut conn)
+                .unwrap();
+
+        create_role("authenticated", &mut conn);
+        grant_all_on_schema("dEv", "authenticated", &mut conn);
+
+        let notes_oid: u32 =
+            crate::filters::table::table_oid::get_table_oid("dEv", "Notes7", &mut conn).unwrap();
+
+        let claim_sub = uuid::Uuid::new_v4();
+        let sub_id = uuid::uuid!("37c7e506-9eca-4671-8c48-526d404660ce");
+
+        insert_into(subscription)
+            .values((
+                subscription_id.eq(sub_id),
+                entity.eq(notes_oid),
+                claims.eq(json!({
+                    "role": "authenticated",
+                    "email": "example@example.com",
+                    "sub": claim_sub
+                })),
+            ))
+            .execute(&mut conn)
+            .unwrap();
+
+        let subscriptions = subscription.load::<Subscription>(&mut conn).unwrap();
+
+        let wal2json_json = format!(
+            r#"{{
+                "action":"I",
+                "timestamp":"2022-07-07 14:52:58.092695+00",
+                "schema":"dEv",
+                "table":"Notes7",
+                "columns":[
+                    {{"name":"id","type":"Color","typeoid":{type_oid},"value": "YELLOW"}}
+                ],
+                "pk":[
+                    {{"name":"id","type":"Color","typeoid":{type_oid}}}
+                ]
+            }}"#
+        );
+
+        let rec: wal2json::Record = serde_json::from_str(wal2json_json.as_ref()).unwrap();
+
+        let walrus_output = crate::process_record(
+            &rec,
+            &subscriptions,
+            "supabase_multiplayer",
+            1024 * 1024,
+            &mut conn,
+        )
+        .unwrap();
+
+        let expected = vec![realtime::WALRLS {
+            wal: realtime::Data {
+                schema: "dEv",
+                table: "Notes7",
+                r#type: realtime::Action::INSERT,
+                commit_timestamp: &rec.timestamp,
+                columns: vec![realtime::Column {
+                    name: "id".to_string(),
+                    type_: "Color".to_string(),
+                }],
+                record: HashMap::from([("id", json!("YELLOW"))]),
+                old_record: None,
+            },
+            is_rls_enabled: false,
+            subscription_ids: vec![sub_id],
+            errors: vec![],
         }];
 
         assert_eq!(walrus_output, expected);
