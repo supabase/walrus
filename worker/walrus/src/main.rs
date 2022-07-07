@@ -293,7 +293,7 @@ fn process_record<'a>(
          */
 
         // If the role can not select any columns in the table, return
-        if action != realtime::Action::DELETE && columns.len() == 0 {
+        if columns.len() == 0 {
             let r = realtime::WALRLS {
                 wal: realtime::Data {
                     schema: rec.schema,
@@ -854,6 +854,93 @@ mod tests {
             is_rls_enabled: false,
             subscription_ids: vec![sub_id],
             errors: vec![],
+        }];
+
+        assert_eq!(walrus_output, expected);
+    }
+
+    #[test]
+    fn test_error_unauthorized() {
+        let mut conn = establish_connection();
+        crate::sql::migrations::run_migrations(&mut conn)
+            .expect("Pending migrations failed to execute");
+        create_auth_schema(&mut conn);
+        truncate("realtime", "subscription", &mut conn);
+        create_publication_for_all_tables("supabase_multiplayer", &mut conn);
+
+        drop_table("public", "notes6", &mut conn);
+        diesel::sql_query("create table if not exists public.notes6(id int primary key);")
+            .execute(&mut conn)
+            .unwrap();
+
+        create_role("authenticated", &mut conn);
+
+        diesel::sql_query("create table if not exists public.notes6(id int primary key);")
+            .execute(&mut conn)
+            .unwrap();
+
+        diesel::sql_query("revoke select on public.notes6 from authenticated;")
+            .execute(&mut conn)
+            .unwrap();
+
+        let notes_oid: u32 =
+            crate::filters::table::table_oid::get_table_oid("public", "notes6", &mut conn).unwrap();
+
+        let claim_sub = uuid::Uuid::new_v4();
+        let sub_id = uuid::uuid!("37c7e506-9eca-4671-8c48-526d404660ce");
+
+        insert_into(subscription)
+            .values((
+                subscription_id.eq(sub_id),
+                entity.eq(notes_oid),
+                claims.eq(json!({
+                    "role": "authenticated",
+                    "email": "example@example.com",
+                    "sub": claim_sub
+                })),
+            ))
+            .execute(&mut conn)
+            .unwrap();
+
+        let subscriptions = subscription.load::<Subscription>(&mut conn).unwrap();
+
+        let wal2json_json = r#"{
+            "action":"D",
+            "timestamp":"2022-07-07 14:52:58.092695+00",
+            "schema":"public",
+            "table":"notes6",
+            "identity":[
+                {"name":"id","type":"integer","typeoid":23,"value":0}
+            ],
+            "pk":[
+                {"name":"id","type":"integer","typeoid":23}
+            ]
+        }"#;
+
+        let rec: wal2json::Record = serde_json::from_str(wal2json_json).unwrap();
+
+        let walrus_output = crate::process_record(
+            &rec,
+            &subscriptions,
+            "supabase_multiplayer",
+            1024 * 1024,
+            &mut conn,
+        )
+        .unwrap();
+
+        let expected = vec![realtime::WALRLS {
+            wal: realtime::Data {
+                schema: "public",
+                table: "notes6",
+                r#type: realtime::Action::DELETE,
+                commit_timestamp: &rec.timestamp,
+                columns: vec![],
+                record: HashMap::new(),
+                old_record: None,
+            },
+            is_rls_enabled: false,
+            subscription_ids: vec![sub_id],
+            errors: vec!["Error 401: Unauthorized"],
         }];
 
         assert_eq!(walrus_output, expected);
