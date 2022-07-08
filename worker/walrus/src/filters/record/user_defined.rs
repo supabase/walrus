@@ -41,7 +41,8 @@ pub fn visible_through_filters(
     for filter in filters {
         let filter_value: serde_json::Value = match serde_json::from_str(&filter.value) {
             Ok(v) => v,
-            Err(err) => return Err(errors::FilterError::FilterParsing(format!("{}", err))),
+            // Composite types are not parsable as json
+            Err(err) => return Err(errors::FilterError::DelegateToSQL(format!("{}", err))),
         };
 
         let column = match columns

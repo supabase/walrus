@@ -34,9 +34,6 @@ impl fmt::Display for Error {
 
 #[derive(Debug)]
 pub enum FilterError {
-    // unrecoverable. trash the subscription
-    FilterParsing(String),
-
     // Filter too difficult to handle locally. Delgate it to SQL
     DelegateToSQL(String),
 }
@@ -44,7 +41,6 @@ pub enum FilterError {
 impl fmt::Display for FilterError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let msg = match self {
-            Self::FilterParsing(x) => x,
             Self::DelegateToSQL(x) => x,
         };
 

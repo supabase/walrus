@@ -365,6 +365,7 @@ fn process_record<'a>(
             let mut delegate_to_sql_filters = vec![];
 
             for sub in entity_role_subscriptions {
+                println!("sub: {:?}", sub);
                 match filters::record::user_defined::visible_through_filters(
                     &sub.filters,
                     rec.columns.as_ref().unwrap_or(&vec![]),
@@ -974,17 +975,17 @@ mod tests {
             .execute(&mut conn)
             .unwrap();
 
-        diesel::sql_query("drop type if exists \"Color\" cascade;")
+        diesel::sql_query("drop type if exists \"dEv\".\"Color\" cascade;")
             .execute(&mut conn)
             .unwrap();
 
-        diesel::sql_query("create type \"Color\" as enum ('RED', 'YELLOW', 'GREEN');")
+        diesel::sql_query("create type \"dEv\".\"Color\" as enum ('RED', 'YELLOW', 'GREEN');")
             .execute(&mut conn)
             .unwrap();
 
         drop_table("dEv", "Notes7", &mut conn);
         diesel::sql_query(
-            "create table if not exists \"dEv\".\"Notes7\"(id \"Color\" primary key);",
+            "create table if not exists \"dEv\".\"Notes7\"(id \"dEv\".\"Color\" primary key);",
         )
         .execute(&mut conn)
         .unwrap();
@@ -1026,12 +1027,11 @@ mod tests {
                     "email": "example@example.com",
                     "sub": claim_sub
                 })),
-                /*filters.eq(vec![UserDefinedFilter {
+                filters.eq(vec![UserDefinedFilter {
                     column_name: "id".to_string(),
                     op: realtime::Op::Equal,
                     value: "YELLOW".to_string(),
                 }]),
-                */
             ))
             .execute(&mut conn)
             .unwrap();
