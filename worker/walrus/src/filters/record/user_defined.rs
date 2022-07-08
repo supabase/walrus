@@ -68,8 +68,12 @@ pub fn visible_through_filters(
 
         match column.type_.as_ref() {
             // All operations supported
+            // regtype names (provided by wal2json)
             "boolean" | "smallint" | "integer" | "bigint" | "serial" | "bigserial" | "numeric"
-            | "double precision" | "character" | "character varying" | "text" => match &filter.op {
+            | "double precision" | "character" | "character varying" | "text"
+            // Type 2 (from pg_type.typname)
+            | "bool" | "char" | "int2" | "int4" | "int8" | "float4" | "float8" | "varchar"
+            => match &filter.op {
                 // List is currently exhastive but that may be possible if types/ops expand
                 Op::Equal
                 | Op::NotEqual
@@ -154,5 +158,56 @@ where
     if a >= b {
         ops.push(Op::GreaterThanOrEqual);
     };
+    ops.sort();
     ops
+}
+
+#[cfg(test)]
+mod tests {
+
+    use crate::filters::record::user_defined::get_valid_ops;
+    use crate::models::realtime::Op;
+    use serde_json::json;
+
+    #[test]
+    fn test_get_valid_ops_eq() {
+        let a: i32 = 1;
+        let a = json!(a);
+
+        let eq_ops = get_valid_ops(&a, &a).unwrap();
+        assert_eq!(
+            eq_ops,
+            vec![Op::Equal, Op::LessThanOrEqual, Op::GreaterThanOrEqual]
+        );
+    }
+
+    #[test]
+    fn test_get_valid_ops_lt() {
+        let a: i32 = 1;
+        let a = json!(a);
+
+        let b: i32 = 2;
+        let b = json!(b);
+
+        let eq_ops = get_valid_ops(&a, &b).unwrap();
+        assert_eq!(
+            eq_ops,
+            vec![Op::NotEqual, Op::LessThan, Op::LessThanOrEqual]
+        );
+    }
+
+    #[test]
+    fn test_get_valid_ops_gt() {
+        let a: i32 = 2;
+        let a = json!(a);
+
+        let b: i32 = 1;
+        let b = json!(b);
+
+        let eq_ops = get_valid_ops(&a, &b).unwrap();
+        assert_eq!(
+            eq_ops,
+            vec![Op::NotEqual, Op::GreaterThan, Op::GreaterThanOrEqual]
+        );
+    }
 }

@@ -32,6 +32,7 @@ impl fmt::Display for Error {
     }
 }
 
+#[derive(Debug)]
 pub enum FilterError {
     // unrecoverable. trash the subscription
     FilterParsing(String),

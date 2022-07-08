@@ -186,7 +186,9 @@ pub fn update_subscriptions(
 #[diesel(postgres_type(schema = "realtime", name = "equality_op"))]
 pub struct OpType;
 
-#[derive(Debug, PartialEq, FromSqlRow, AsExpression, Clone, Deserialize, Serialize, Eq)]
+#[derive(
+    Debug, PartialEq, FromSqlRow, AsExpression, Clone, Deserialize, Serialize, Eq, Ord, PartialOrd,
+)]
 #[diesel(sql_type = OpType)]
 pub enum Op {
     #[serde(alias = "eq")]
