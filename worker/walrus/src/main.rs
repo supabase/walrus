@@ -15,6 +15,7 @@ use std::process::{Command, Stdio};
 use std::thread::sleep;
 use std::time;
 
+mod errors;
 mod filters;
 mod models;
 mod sql;
@@ -63,15 +64,15 @@ fn main() {
     }
 }
 
-fn run(args: &Args) -> Result<(), String> {
+fn run(args: &Args) -> Result<(), errors::Error> {
     // Connect to Postgres
     let conn_result = &mut PgConnection::establish(&args.connection);
     let publication = &args.publication;
 
     let conn = match conn_result {
         Ok(c) => c,
-        Err(_) => {
-            return Err("failed to make postgres connection".to_string());
+        Err(err) => {
+            return Err(errors::Error::PostgresConnectionError(format!("{}", err)));
         }
     };
 
@@ -107,7 +108,7 @@ fn run(args: &Args) -> Result<(), String> {
         .spawn();
 
     match cmd {
-        Err(err) => Err(format!("{}", err)),
+        Err(err) => Err(errors::Error::PgRecvLogicalError(format!("{}", err))),
         Ok(mut cmd) => {
             info!("pg_recvlogical started");
             // Reading from stdin
@@ -122,7 +123,7 @@ fn run(args: &Args) -> Result<(), String> {
                 Err(err) => {
                     cmd.kill().unwrap();
                     error!("Error loading subscriptions: {}", err);
-                    return Err("Error loading subscriptions".to_string());
+                    return Err(errors::Error::Subscriptions(format!("{}", err)));
                 }
             };
             info!("Snapshot of subscriptions loaded");
@@ -171,7 +172,7 @@ fn run(args: &Args) -> Result<(), String> {
                                     Err(err) => {
                                         cmd.kill().unwrap();
                                         error!("WALRUS Error: {}", err);
-                                        return Err("walrus error".to_string());
+                                        return Err(errors::Error::Walrus(format!("{}", err)));
                                     }
                                 }
                             }
@@ -183,7 +184,7 @@ fn run(args: &Args) -> Result<(), String> {
             }
             match cmd.wait() {
                 Ok(_) => Ok(()),
-                Err(err) => Err(format!("{}", err)),
+                Err(err) => Err(errors::Error::PgRecvLogicalError(format!("{}", err))),
             }
         }
     }
@@ -195,7 +196,7 @@ fn process_record<'a>(
     publication: &str,
     max_record_bytes: usize,
     conn: &mut PgConnection,
-) -> Result<Vec<realtime::WALRLS<'a>>, String> {
+) -> Result<Vec<realtime::WALRLS<'a>>, errors::Error> {
     /*
      *  Table Level Filters
      */
@@ -374,12 +375,15 @@ fn process_record<'a>(
                     }
                     Ok(false) => (),
                     // delegate to SQL when we can't handle the comparison in rust
-                    Err(_) => {
+                    Err(errors::FilterError::DelegateToSQL(_)) => {
                         //debug!(
                         //    "Filters delegated to SQL: {:?}. Error: {}",
                         //    &sub.filters, err
                         //);
                         delegate_to_sql_filters.push(sub);
+                    }
+                    Err(err) => {
+                        error!("Failed to apply filters: {}", err)
                     }
                 }
             }

@@ -1,3 +1,4 @@
+use crate::errors;
 use cached::proc_macro::cached;
 use cached::TimedSizedCache;
 use diesel::*;
@@ -13,7 +14,7 @@ pub mod sql {
 }
 
 #[cached(
-    type = "TimedSizedCache<String, Result<u32, String>>",
+    type = "TimedSizedCache<String, Result<u32, errors::Error>>",
     create = "{ TimedSizedCache::with_size_and_lifespan(10000, 1)}",
     convert = r#"{ format!("{}.{}", schema_name, table_name) }"#,
     sync_writes = true
@@ -22,8 +23,8 @@ pub fn get_table_oid(
     schema_name: &str,
     table_name: &str,
     conn: &mut PgConnection,
-) -> Result<u32, String> {
+) -> Result<u32, errors::Error> {
     select(sql::get_table_oid(schema_name, table_name))
         .first(conn)
-        .map_err(|x| format!("{}", x))
+        .map_err(|x| errors::Error::SQLFunction(format!("{}", x)))
 }

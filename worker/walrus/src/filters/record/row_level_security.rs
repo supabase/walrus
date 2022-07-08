@@ -1,3 +1,4 @@
+use crate::errors;
 use crate::models::walrus;
 use diesel::*;
 
@@ -16,12 +17,12 @@ pub fn is_visible_through_rls(
     columns: &Vec<walrus::Column>,
     ids: &Vec<i64>,
     conn: &mut PgConnection,
-) -> Result<Vec<i64>, String> {
+) -> Result<Vec<i64>, errors::Error> {
     select(sql::is_visible_through_rls(
         table_oid,
         serde_json::to_value(columns).unwrap(),
         ids,
     ))
     .first(conn)
-    .map_err(|x| format!("{}", x))
+    .map_err(|x| errors::Error::SQLFunction(format!("{}", x)))
 }

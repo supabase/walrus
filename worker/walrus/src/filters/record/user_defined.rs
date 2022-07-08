@@ -1,3 +1,4 @@
+use crate::errors;
 use crate::models::walrus;
 use crate::models::{realtime, wal2json};
 use diesel::*;
@@ -34,13 +35,13 @@ fn is_null(v: &serde_json::Value) -> bool {
 pub fn visible_through_filters(
     filters: &Vec<realtime::UserDefinedFilter>,
     columns: &Vec<wal2json::Column>,
-) -> Result<bool, String> {
+) -> Result<bool, errors::FilterError> {
     use realtime::Op;
 
     for filter in filters {
         let filter_value: serde_json::Value = match serde_json::from_str(&filter.value) {
             Ok(v) => v,
-            Err(err) => return Err(format!("{}", err)),
+            Err(err) => return Err(errors::FilterError::FilterParsing(format!("{}", err))),
         };
 
         let column = match columns
@@ -90,9 +91,17 @@ pub fn visible_through_filters(
                         return Ok(false);
                     };
                 }
-                _ => return Err("could not handle filter op for allowed types".to_string()),
+                _ => {
+                    return Err(errors::FilterError::DelegateToSQL(
+                        "could not handle filter op for allowed types".to_string(),
+                    ))
+                }
             },
-            _ => return Err("Could not handle type. Delegate comparison to SQL".to_string()),
+            _ => {
+                return Err(errors::FilterError::DelegateToSQL(
+                    "Could not handle type. Delegate comparison to SQL".to_string(),
+                ))
+            }
         };
     }
     Ok(true)
@@ -102,7 +111,7 @@ pub fn visible_through_filters(
 fn get_valid_ops(
     a: &serde_json::Value,
     b: &serde_json::Value,
-) -> Result<Vec<crate::realtime::Op>, String> {
+) -> Result<Vec<crate::realtime::Op>, errors::FilterError> {
     use serde_json::Value;
 
     match (a, b) {
@@ -112,7 +121,11 @@ fn get_valid_ops(
         (Value::String(a_), Value::String(b_)) => Ok(get_matching_ops(a_, b_)),
         // Array possible
         // Object possible
-        _ => return Err("non-scalar or mismatched json value types".to_string()),
+        _ => {
+            return Err(errors::FilterError::DelegateToSQL(
+                "non-scalar or mismatched json value types".to_string(),
+            ));
+        }
     }
 }
 
