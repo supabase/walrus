@@ -200,6 +200,9 @@ fn process_record<'a>(
      *  Table Level Filters
      */
 
+    // Will not be necessary after replacing wal2json
+    let table_oid = crate::filters::table::table_oid::get_table_oid(rec.schema, rec.table, conn)?;
+
     let is_in_publication =
         filters::table::publication::is_in_publication(&rec.schema, &rec.table, publication, conn)?;
 
@@ -212,8 +215,7 @@ fn process_record<'a>(
         .collect();
 
     let is_subscribed_to = entity_subscriptions.len() > 0;
-    let is_rls_enabled =
-        filters::table::row_level_security::is_rls_enabled(&rec.schema, &rec.table, conn)?;
+    let is_rls_enabled = filters::table::row_level_security::is_rls_enabled(table_oid, conn)?;
 
     debug!(
         "Processing record: {}.{} inpub: {}, entity_subs {}, rls_on {}",
@@ -277,9 +279,6 @@ fn process_record<'a>(
             .filter(|x| &x.claims_role_name == role)
             .map(|x| *x)
             .collect();
-
-        let table_oid =
-            crate::filters::table::table_oid::get_table_oid(rec.schema, rec.table, conn)?;
 
         // realtime columns to output with correct type name conversion (e.g. interger -> int4)
         // and filtered to columns selectable by the current user
@@ -413,8 +412,7 @@ fn process_record<'a>(
                 false => visible_through_filters,
                 true => {
                     match filters::record::row_level_security::is_visible_through_rls(
-                        &rec.schema,
-                        &rec.table,
+                        table_oid,
                         &walcols,
                         &visible_through_filters.iter().map(|x| x.id).collect(),
                         conn,

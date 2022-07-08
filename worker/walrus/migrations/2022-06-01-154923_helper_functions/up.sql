@@ -11,18 +11,16 @@ as $$
             select
                 1
             from
-                pg_publication pp
-                left join pg_publication_tables ppt
-                    on pp.pubname = ppt.pubname
+                pg_publication_tables ppt
             where
-                pp.pubname = publication_name
+                ppt.pubname = publication_name
                 and ppt.schemaname = schema_name
                 and ppt.tablename = table_name
             limit 1
         )
 $$;
 
-create function realtime.is_rls_enabled(schema_name text, table_name text)
+create function realtime.is_rls_enabled(table_oid oid)
     returns bool
     language sql
 as $$
@@ -31,24 +29,8 @@ as $$
     from
         pg_class
     where
-        oid = format('%I.%I', schema_name, table_name)::regclass
+        oid = table_oid
     limit 1;
-$$;
-
-create function realtime.subscribed_roles(
-    schema_name text,
-    table_name text
-)
-    returns text[]
-    language sql
-as $$
-    select
-        coalesce(array_agg(distinct claims_role), '{}')
-    from
-        realtime.subscription s
-    where
-        s.entity = format('%I.%I', schema_name, table_name)::regclass
-    limit 1
 $$;
 
 
@@ -191,8 +173,7 @@ $$;
 
 
 create function realtime.is_visible_through_rls(
-    schema_name text,
-    table_name text,
+    table_oid oid,
     columns jsonb,
     ids int8[]
 )
@@ -200,7 +181,7 @@ create function realtime.is_visible_through_rls(
     language plpgsql
 as $$
 declare
-    entity_ regclass = format('%I.%I', schema_name, table_name)::regclass;
+    entity_ regclass = table_oid::regclass;
     cols realtime.wal_column[];
     visible_to_subscription_ids int8[] = '{}';
     subscription_id int8;
