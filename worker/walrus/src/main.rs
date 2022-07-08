@@ -408,13 +408,15 @@ fn process_record<'a>(
                 }
             }
 
+            println!("through filters {:?}", visible_through_filters);
+
             // Row Level Security
-            let subscriptions_to_notify: Vec<&realtime::Subscription> = match is_rls_enabled
-                && visible_through_filters.len() > 0
-                && !vec![realtime::Action::DELETE, realtime::Action::TRUNCATE].contains(&action)
-            {
-                false => visible_through_filters,
-                true => {
+            let subscriptions_to_notify: Vec<&realtime::Subscription> = match (
+                is_rls_enabled && visible_through_filters.len() > 0,
+                vec![realtime::Action::DELETE, realtime::Action::TRUNCATE].contains(&action),
+            ) {
+                (false, _) | (true, true) => visible_through_filters,
+                _ => {
                     match filters::record::row_level_security::is_visible_through_rls(
                         table_oid,
                         &walcols,
@@ -433,6 +435,8 @@ fn process_record<'a>(
                     }
                 }
             };
+
+            println!("notify {:?}", subscriptions_to_notify);
 
             let r = realtime::WALRLS {
                 wal: realtime::Data {
@@ -466,7 +470,7 @@ fn process_record<'a>(
 mod tests {
     extern crate diesel;
     use crate::models::{realtime, wal2json};
-    use crate::realtime::Subscription;
+    use crate::realtime::{Subscription, UserDefinedFilter};
     use crate::sql::schema::realtime::subscription::dsl::*;
     use chrono::{TimeZone, Utc};
     use diesel::prelude::*;
@@ -957,7 +961,6 @@ mod tests {
 
     #[test]
     fn test_quoted_type_schema_and_table() {
-        // TODO: Enable RLS to make sure that works
         // TODO: Add user defined filter to make sure delegate to sql works
 
         let mut conn = establish_connection();
@@ -974,6 +977,7 @@ mod tests {
         diesel::sql_query("drop type if exists \"Color\" cascade;")
             .execute(&mut conn)
             .unwrap();
+
         diesel::sql_query("create type \"Color\" as enum ('RED', 'YELLOW', 'GREEN');")
             .execute(&mut conn)
             .unwrap();
@@ -985,15 +989,27 @@ mod tests {
         .execute(&mut conn)
         .unwrap();
 
-        use diesel::dsl::sql;
-
-        let type_oid =
-            sql::<sql_types::Oid>("select oid from pg_type where typname = 'Color' limit 1")
-                .get_result::<u32>(&mut conn)
-                .unwrap();
+        let type_oid = diesel::dsl::sql::<sql_types::Oid>(
+            "select oid from pg_type where typname = 'Color' limit 1",
+        )
+        .get_result::<u32>(&mut conn)
+        .unwrap();
 
         create_role("authenticated", &mut conn);
         grant_all_on_schema("dEv", "authenticated", &mut conn);
+
+        diesel::sql_query(
+            "create policy rls_note_select
+            on \"dEv\".\"Notes7\"
+            to authenticated
+            using (true);",
+        )
+        .execute(&mut conn)
+        .unwrap();
+
+        diesel::sql_query("alter table \"dEv\".\"Notes7\" enable row level security;")
+            .execute(&mut conn)
+            .unwrap();
 
         let notes_oid: u32 =
             crate::filters::table::table_oid::get_table_oid("dEv", "Notes7", &mut conn).unwrap();
@@ -1010,11 +1026,21 @@ mod tests {
                     "email": "example@example.com",
                     "sub": claim_sub
                 })),
+                /*filters.eq(vec![UserDefinedFilter {
+                    column_name: "id".to_string(),
+                    op: realtime::Op::Equal,
+                    value: "YELLOW".to_string(),
+                }]),
+                */
             ))
             .execute(&mut conn)
             .unwrap();
 
         let subscriptions = subscription.load::<Subscription>(&mut conn).unwrap();
+
+        diesel::sql_query("insert into \"dEv\".\"Notes7\"(id) values ('YELLOW');")
+            .execute(&mut conn)
+            .unwrap();
 
         let wal2json_json = format!(
             r#"{{
@@ -1055,7 +1081,7 @@ mod tests {
                 record: HashMap::from([("id", json!("YELLOW"))]),
                 old_record: None,
             },
-            is_rls_enabled: false,
+            is_rls_enabled: true,
             subscription_ids: vec![sub_id],
             errors: vec![],
         }];

@@ -208,6 +208,7 @@ begin
     if (select 1 from pg_prepared_statements where name = 'walrus_rls_stmt' limit 1) > 0 then
         deallocate walrus_rls_stmt;
     end if;
+
     execute realtime.build_prepared_statement_sql('walrus_rls_stmt', entity_, cols);
 
     for subscription_id, claims in (

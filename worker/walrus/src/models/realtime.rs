@@ -233,7 +233,7 @@ impl FromSql<OpType, Pg> for Op {
     }
 }
 
-#[derive(SqlType, PartialEq)]
+#[derive(SqlType, PartialEq, QueryId)]
 #[diesel(postgres_type(schema = "realtime", name = "user_defined_filter"))]
 pub struct UserDefinedFilterType;
 
