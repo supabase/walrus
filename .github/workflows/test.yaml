@@ -12,14 +12,28 @@ jobs:
 
     runs-on: ubuntu-latest
     container:
-      image: postgres:14.4
+      image: supabase/postgres:latest
       options: --tmpfs=/pgtmpfs -e PGDATA=/pgtmpfs
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
+
+      - name: Checkout wal2json
+        uses: actions/checkout@v3
+        with:
+          repository: eulerto/wal2json
+          ref: master
+          path: ./wal2json
 
       - name: Run Test
         run: |
+          # install wal2json
+          cd wal2json
+          apt-get update && apt-get install build-essential postgresql-server-dev-14 -y
+          make
+          make install
+          # run tests
+          cd ..
           chown -R postgres /__w/walrus/walrus
           su postgres -c 'bin/installcheck'
 
