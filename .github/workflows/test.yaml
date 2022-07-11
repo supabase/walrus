@@ -1,4 +1,4 @@
-name: WalRus tests
+name: WALRUS tests
 
 on:
   pull_request:
@@ -13,11 +13,12 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: postgres:14.4
-      options: -u 1001 --tmpfs=/pgtmpfs -e PGDATA=/pgtmpfs
+      options: --tmpfs=/pgtmpfs -e PGDATA=/pgtmpfs
 
     steps:
       - uses: actions/checkout@v2
 
       - name: Run Test
         run: |
-          bin/installcheck
+          chown -R postgres /__w/walrus/walrus
+          su postgres -c 'bin/installcheck'
