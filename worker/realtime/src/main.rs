@@ -1,7 +1,8 @@
 use clap::Parser;
 use env_logger;
 use futures::stream::SplitSink;
-use futures_util::SinkExt;
+use futures::{Sink, SinkExt, Stream};
+//use futures_util::SinkExt;
 use futures_util::{future, pin_mut, StreamExt};
 use log::{error, info, warn};
 use serde::Serialize;
@@ -70,7 +71,6 @@ async fn main() {
     // url
     let args = Args::parse();
     let addr = build_url(&args.url, &args.header);
-    let url = url::Url::parse(&addr).expect("invalid URL");
     let topic = args.topic.to_string();
 
     info!("{:?}", args);
@@ -78,10 +78,20 @@ async fn main() {
     // enable logger
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    loop {
-        // websocket
-        info!("Connecting to websocket");
-        let ws_connection = connect_async(&url).await;
+    info!("Connecting to websocket");
+    let mut ws_stream: ReconnectWs = ReconnectWs::connect(addr).await.unwrap();
+
+    ws_stream
+        .send(Message::text(String::from("hello world!")))
+        .await
+        .unwrap();
+
+    // websocket
+    //let ws_connection: String = connect_async(&url).await;
+    //Result<(WebSocketStream<tokio_tungstenite:: MaybeTlsStream<tokio::net::TcpStream>>, Response<()>), tokio_tungstenite::tungstenite::Error>
+    //let mut tcp_stream = StubbornTcpStream::connect(addr).await.unwrap();
+
+    /*
 
         match ws_connection {
             Err(msg) => {
@@ -92,33 +102,42 @@ async fn main() {
             }
             Ok((ws_stream, _)) => {
                 info!("WebSocket handshake successful");
-                let (mut write, read) = ws_stream.split();
 
-                write = join_topic(write, topic.to_string()).await;
+                let (mut write, read) = ws_stream.split();
+                join_topic(&mut write, topic.to_string()).await;
 
                 // Futures channel
                 let (tx, rx) = futures_channel::mpsc::unbounded();
                 let heartbeat_tx = tx.clone();
-
                 tokio::spawn(read_stdin(tx, topic.to_string()));
+
                 tokio::spawn(heartbeat(heartbeat_tx));
 
                 // Map
                 let tx_to_ws = rx.map(Ok).forward(write);
+
                 let ws_to_stdout = {
                     read.for_each(|message| async {
                         match message {
                             Ok(msg) => match msg.into_text() {
                                 Ok(msg_text) => info!("{}", msg_text),
-                                Err(err) => error!(
-                                    "Failed to parse message from realtime service: Error: {}",
-                                    err
-                                ),
+                                Err(err) => {
+                                    error!(
+                                        "Failed to parse message from realtime service: Error: {}",
+                                        err
+                                    );
+                                    // Attempt to rejoin
+                                    //write = join_topic(write, topic.to_string()).await;
+                                }
                             },
-                            Err(err) => error!(
-                                "Failed to read message from realtime service: Error: {}",
-                                err
-                            ),
+                            Err(err) => {
+                                error!(
+                                    "Failed to read message from realtime service: Error: {}",
+                                    err
+                                );
+                                // Attempt to rejoin
+                                //write = join_topic(write, topic.to_string()).await;
+                            }
                         };
                     })
                 };
@@ -127,7 +146,7 @@ async fn main() {
                 future::select(tx_to_ws, ws_to_stdout).await;
             }
         }
-    }
+    */
 }
 
 pub fn build_url(url: &str, params: &Vec<(String, String)>) -> String {
@@ -140,12 +159,14 @@ pub fn build_url(url: &str, params: &Vec<(String, String)>) -> String {
 }
 
 async fn join_topic(
-    mut writer: SplitSink<
+    writer: &mut SplitSink<
         WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
         Message,
     >,
     topic_name: String,
-) -> SplitSink<WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, Message> {
+)
+//-> SplitSink<WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, Message> {
+{
     // join channel
     let join_message = PhoenixMessage {
         event: PhoenixMessageEvent::Join,
@@ -157,7 +178,26 @@ async fn join_topic(
     let join_message = serde_json::to_string(&join_message).unwrap();
     let msg = Message::Text(join_message);
     writer.send(msg).await.unwrap();
-    writer
+    //writer
+}
+
+fn join_topic_msg(tx: futures_channel::mpsc::UnboundedSender<Message>, topic_name: String) {
+    // join channel
+    let join_message = PhoenixMessage {
+        event: PhoenixMessageEvent::Join,
+        payload: serde_json::json!({}),
+        reference: None,
+        topic: topic_name,
+    };
+
+    let msg = Message::Text(serde_json::to_string(&join_message).unwrap());
+    // push to output stream
+    match tx.unbounded_send(msg) {
+        Ok(()) => (),
+        Err(err) => {
+            error!("Error sending message: {}", err);
+        }
+    };
 }
 
 // Our helper method which will read data from stdin and send it along the
@@ -188,7 +228,12 @@ async fn read_stdin(tx: futures_channel::mpsc::UnboundedSender<Message>, topic: 
                                 let msg =
                                     Message::Text(serde_json::to_string(&phoenix_msg).unwrap());
                                 // push to output stream
-                                tx.unbounded_send(msg).unwrap();
+                                match tx.unbounded_send(msg) {
+                                    Ok(()) => (),
+                                    Err(err) => {
+                                        error!("Error sending message: {}", err);
+                                    }
+                                };
                             }
                             Err(err) => {
                                 warn!(
@@ -224,7 +269,93 @@ async fn heartbeat(tx: futures_channel::mpsc::UnboundedSender<Message>) {
         // push to futures stream
         match tx.unbounded_send(msg) {
             Ok(()) => (),
-            Err(err) => error!("Error sending heatbeat: {}", err),
+            Err(err) => {
+                error!("Error sending heatbeat: {}", err);
+            }
         };
     }
 }
+
+use std::future::Future;
+use std::io;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+use stream_reconnect::{ReconnectStream, UnderlyingStream};
+use tokio::net::TcpStream;
+use tokio_tungstenite::tungstenite::error::Error as WsError;
+use tokio_tungstenite::MaybeTlsStream;
+
+struct MyWs(WebSocketStream<MaybeTlsStream<TcpStream>>);
+
+impl Stream for MyWs {
+    type Item = Result<Message, WsError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.0).poll_next(cx)
+    }
+}
+
+impl Sink<Message> for MyWs {
+    type Error = WsError;
+
+    fn poll_ready(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+    ) -> Poll<Result<(), Self::Error>> {
+        Pin::new(&mut self.0).poll_ready(_cx)
+    }
+
+    fn start_send(mut self: Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
+        Pin::new(&mut self.0).start_send(item)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Pin::new(&mut self.0).poll_flush(cx)
+    }
+
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Pin::new(&mut self.0).poll_close(cx)
+    }
+}
+
+// implement Stream & Sink for MyWs
+
+impl UnderlyingStream<String, Result<Message, WsError>, WsError> for MyWs {
+    // Establishes connection.
+    // Additionally, this will be used when reconnect tries are attempted.
+    fn establish(addr: String) -> Pin<Box<dyn Future<Output = Result<Self, WsError>> + Send>> {
+        Box::pin(async move {
+            // In this case, we are trying to connect to the WebSocket endpoint
+            let ws_connection = connect_async(addr).await.unwrap().0;
+            Ok(MyWs(ws_connection))
+        })
+    }
+
+    // The following errors are considered disconnect errors.
+    fn is_write_disconnect_error(&self, err: &WsError) -> bool {
+        matches!(
+            err,
+            WsError::ConnectionClosed
+                | WsError::AlreadyClosed
+                | WsError::Io(_)
+                | WsError::Tls(_)
+                | WsError::Protocol(_)
+        )
+    }
+
+    // If an `Err` is read, then there might be an disconnection.
+    fn is_read_disconnect_error(&self, item: &Result<Message, WsError>) -> bool {
+        if let Err(e) = item {
+            self.is_write_disconnect_error(e)
+        } else {
+            false
+        }
+    }
+
+    // Return "Exhausted" if all retry attempts are failed.
+    fn exhaust_err() -> WsError {
+        WsError::Io(io::Error::new(io::ErrorKind::Other, "Exhausted"))
+    }
+}
+
+type ReconnectWs = ReconnectStream<MyWs, String, Result<Message, WsError>, WsError>;
