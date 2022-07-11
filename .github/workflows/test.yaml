@@ -1,0 +1,24 @@
+name: WalRus tests
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+
+jobs:
+  autotests:
+    name: Run tests
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Run Test
+        run: |
+          docker run \
+            --rm -v $(pwd):/app -w /app \
+            --tmpfs=/pgtmpfs -e PGDATA=/pgtmpfs -u postgres \
+            postgres:14.4 \
+            bin/installcheck
