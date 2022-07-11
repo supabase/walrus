@@ -81,15 +81,9 @@ async fn main() {
     info!("Connecting to websocket");
     let ws_stream: ReconnectWs = ReconnectWs::connect(addr).await.unwrap();
 
-    // websocket
-    //let ws_connection: String = connect_async(&url).await;
-    //Result<(WebSocketStream<tokio_tungstenite:: MaybeTlsStream<tokio::net::TcpStream>>, Response<()>), tokio_tungstenite::tungstenite::Error>
-    //let mut tcp_stream = StubbornTcpStream::connect(addr).await.unwrap();
-
     info!("WebSocket handshake successful");
 
-    let (mut write, read) = ws_stream.split();
-    join_topic(&mut write, topic.to_string()).await;
+    let (write, read) = ws_stream.split();
 
     // Futures channel
     let (tx, rx) = futures_channel::mpsc::unbounded();
@@ -138,31 +132,6 @@ pub fn build_url(url: &str, params: &Vec<(String, String)>) -> String {
     }
     let addr = format!("{}/websocket?vsn={}{}", url, "1.0.0", params_uri);
     addr
-}
-
-async fn join_topic(
-    writer: &mut SplitSink<
-        ReconnectStream<
-            MyWs,
-            String,
-            Result<Message, tokio_tungstenite::tungstenite::Error>,
-            tokio_tungstenite::tungstenite::Error,
-        >,
-        Message,
-    >,
-    topic_name: String,
-) {
-    // join channel
-    let join_message = PhoenixMessage {
-        event: PhoenixMessageEvent::Join,
-        payload: serde_json::json!({}),
-        reference: None,
-        topic: topic_name,
-    };
-
-    let join_message = serde_json::to_string(&join_message).unwrap();
-    let msg = Message::Text(join_message);
-    writer.send(msg).await.unwrap();
 }
 
 // Our helper method which will read data from stdin and send it along the
@@ -293,7 +262,18 @@ impl UnderlyingStream<String, Result<Message, WsError>, WsError> for PhoenixWs {
     fn establish(addr: String) -> Pin<Box<dyn Future<Output = Result<Self, WsError>> + Send>> {
         Box::pin(async move {
             // In this case, we are trying to connect to the WebSocket endpoint
-            let ws_connection = connect_async(addr).await.unwrap().0;
+            let mut ws_connection = connect_async(addr).await.unwrap().0;
+
+            // (re)Join Topic
+            let join_message = PhoenixMessage {
+                event: PhoenixMessageEvent::Join,
+                payload: serde_json::json!({}),
+                reference: None,
+                topic: "walrus:bcd".to_string(),
+            };
+            let join_message = serde_json::to_string(&join_message).unwrap();
+            let msg = Message::Text(join_message);
+            ws_connection.send(msg).await.unwrap();
             Ok(PhoenixWs(ws_connection))
         })
     }
