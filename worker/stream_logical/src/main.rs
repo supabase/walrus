@@ -125,6 +125,7 @@ async fn main() {
     let mut last_keepalive = Instant::now();
     let mut inserts: Vec<u32> = vec![];
     let mut deletes: Vec<u32> = vec![];
+    let mut lsn: u64;
 
     // TODO(olirice) track table defs mapping
     // TODO(olirice) send keepalive every 20 seconds
@@ -136,27 +137,28 @@ async fn main() {
 
         let msg_res = match msg {
             Some(Ok(XLogData(xlog_data))) => match xlog_data.data() {
-                Begin(_) => {
-                    println!("begin");
+                Begin(begin) => {
+                    println!("{:?}", begin)
                 }
                 Insert(insert) => {
-                    println!("insert");
+                    println!("{:?}", insert)
                 }
                 Update(update) => {
-                    println!("update");
+                    println!("{:?}", update)
                 }
                 Delete(delete) => {
-                    println!("delete");
+                    println!("{:?}", delete)
                 }
                 Commit(commit) => {
-                    println!("commit");
+                    println!("{:?}", commit);
+                    lsn = commit.commit_lsn();
                 }
                 Relation(relation) => {
-                    println!("relation");
+                    println!("{:?}", relation)
                 }
                 Origin(_) | Type(_) => {}
                 Truncate(truncate) => {
-                    println!("truncate");
+                    println!("{:?}", truncate)
                 }
                 _ => println!("unknown logical replication message type"),
             },
