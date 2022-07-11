@@ -223,11 +223,6 @@ fn process_record<'a>(
         &rec.schema, &rec.table, is_in_publication, is_subscribed_to, is_rls_enabled
     );
 
-    println!(
-        "Processing record: {}.{} inpub: {}, entity_subs {}, rls_on {}",
-        &rec.schema, &rec.table, is_in_publication, is_subscribed_to, is_rls_enabled
-    );
-
     let exceeds_max_size = serde_json::json!(rec).to_string().len() > max_record_bytes;
     let action = realtime::Action::from_wal2json(&rec.action);
 
@@ -365,7 +360,7 @@ fn process_record<'a>(
             let mut delegate_to_sql_filters = vec![];
 
             for sub in entity_role_subscriptions {
-                println!("sub: {:?}", sub);
+                //println!("sub: {:?}", sub);
                 match filters::record::user_defined::visible_through_filters(
                     &sub.filters,
                     rec.columns.as_ref().unwrap_or(&vec![]),
@@ -382,9 +377,6 @@ fn process_record<'a>(
                         //    &sub.filters, err
                         //);
                         delegate_to_sql_filters.push(sub);
-                    }
-                    Err(err) => {
-                        error!("Failed to apply filters: {}", err)
                     }
                 }
             }
@@ -409,7 +401,7 @@ fn process_record<'a>(
                 }
             }
 
-            println!("through filters {:?}", visible_through_filters);
+            //println!("through filters {:?}", visible_through_filters);
 
             // Row Level Security
             let subscriptions_to_notify: Vec<&realtime::Subscription> = match (
@@ -437,7 +429,7 @@ fn process_record<'a>(
                 }
             };
 
-            println!("notify {:?}", subscriptions_to_notify);
+            //println!("notify {:?}", subscriptions_to_notify);
 
             let r = realtime::WALRLS {
                 wal: realtime::Data {

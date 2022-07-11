@@ -1,8 +1,6 @@
 use clap::Parser;
 use env_logger;
-use futures::stream::SplitSink;
 use futures::{Sink, SinkExt, Stream};
-//use futures_util::SinkExt;
 use futures_util::{future, pin_mut, StreamExt};
 use log::{error, info, warn};
 use serde::Serialize;
@@ -11,7 +9,6 @@ use std::str;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::time::{sleep, Duration};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message, WebSocketStream};
-use url;
 
 /// reads JSON from stdin and forwards it to supabase realtime
 #[derive(Parser, Debug)]
@@ -70,17 +67,20 @@ struct PhoenixMessage {
 async fn main() {
     // url
     let args = Args::parse();
-    let addr = build_url(&args.url, &args.header);
-    let topic = args.topic.to_string();
+
+    let config = PhoenixWsConfig {
+        addr: build_url(&args.url, &args.header),
+        topic_name: args.topic.to_string(),
+    };
+
+    let topic = config.topic_name.to_string();
 
     info!("{:?}", args);
 
     // enable logger
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug")).init();
 
-    info!("Connecting to websocket");
-    let ws_stream: ReconnectWs = ReconnectWs::connect(addr).await.unwrap();
-
+    let ws_stream: ReconnectWs = ReconnectWs::connect(config).await.unwrap();
     info!("WebSocket handshake successful");
 
     let (write, read) = ws_stream.split();
@@ -221,7 +221,13 @@ use tokio_tungstenite::MaybeTlsStream;
 
 // A websocket to communicate with a Phoenix server
 // It reconnects and re-subscribes to a topic if disconnected
-struct PhoenixWs(WebSocketStream<MaybeTlsStream<TcpStream>>);
+struct PhoenixWs(WebSocketStream<MaybeTlsStream<TcpStream>>, PhoenixWsConfig);
+
+#[derive(Clone)]
+struct PhoenixWsConfig {
+    addr: String,
+    topic_name: String,
+}
 
 impl Stream for PhoenixWs {
     type Item = Result<Message, WsError>;
@@ -256,25 +262,30 @@ impl Sink<Message> for PhoenixWs {
 
 // implement Stream & Sink for MyWs
 
-impl UnderlyingStream<String, Result<Message, WsError>, WsError> for PhoenixWs {
+impl UnderlyingStream<PhoenixWsConfig, Result<Message, WsError>, WsError> for PhoenixWs {
     // Establishes connection.
     // Additionally, this will be used when reconnect tries are attempted.
-    fn establish(addr: String) -> Pin<Box<dyn Future<Output = Result<Self, WsError>> + Send>> {
+    fn establish(
+        config: PhoenixWsConfig,
+    ) -> Pin<Box<dyn Future<Output = Result<Self, WsError>> + Send>> {
         Box::pin(async move {
             // In this case, we are trying to connect to the WebSocket endpoint
-            let mut ws_connection = connect_async(addr).await.unwrap().0;
+            info!("Connecting to Realtime");
+
+            let mut ws_connection = connect_async(config.addr.clone()).await?.0;
 
             // (re)Join Topic
             let join_message = PhoenixMessage {
                 event: PhoenixMessageEvent::Join,
                 payload: serde_json::json!({}),
                 reference: None,
-                topic: "walrus:bcd".to_string(),
+                topic: config.topic_name.to_string(),
             };
             let join_message = serde_json::to_string(&join_message).unwrap();
             let msg = Message::Text(join_message);
-            ws_connection.send(msg).await.unwrap();
-            Ok(PhoenixWs(ws_connection))
+            ws_connection.send(msg).await?;
+            info!("Joining topic");
+            Ok(PhoenixWs(ws_connection, config.clone()))
         })
     }
 
@@ -305,4 +316,4 @@ impl UnderlyingStream<String, Result<Message, WsError>, WsError> for PhoenixWs {
     }
 }
 
-type ReconnectWs = ReconnectStream<PhoenixWs, String, Result<Message, WsError>, WsError>;
+type ReconnectWs = ReconnectStream<PhoenixWs, PhoenixWsConfig, Result<Message, WsError>, WsError>;
