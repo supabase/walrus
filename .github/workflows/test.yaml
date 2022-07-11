@@ -22,3 +22,10 @@ jobs:
         run: |
           chown -R postgres /__w/walrus/walrus
           su postgres -c 'bin/installcheck'
+
+      - uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: regression.out
+          path: regression.out
+          retention-days: 7
