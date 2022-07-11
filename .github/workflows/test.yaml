@@ -11,14 +11,13 @@ jobs:
     name: Run tests
 
     runs-on: ubuntu-latest
+    container:
+      image: postgres:14.4
+      options: -u 1001 --tmpfs=/pgtmpfs -e PGDATA=/pgtmpfs
 
     steps:
       - uses: actions/checkout@v2
 
       - name: Run Test
         run: |
-          docker run \
-            --rm -v $(pwd):/app -w /app \
-            --tmpfs=/pgtmpfs -e PGDATA=/pgtmpfs -u postgres \
-            postgres:14.4 \
-            bin/installcheck
+          bin/installcheck
