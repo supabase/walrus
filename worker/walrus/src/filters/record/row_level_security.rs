@@ -18,8 +18,6 @@ pub fn is_visible_through_rls(
     ids: &Vec<i64>,
     conn: &mut PgConnection,
 ) -> Result<Vec<i64>, errors::Error> {
-    println!("columns {:?}", columns);
-    println!("ids {:?}", ids);
     select(sql::is_visible_through_rls(
         table_oid,
         serde_json::to_value(columns).unwrap(),

@@ -135,7 +135,6 @@ fn run(args: &Args) -> Result<(), errors::Error> {
                         let result_record = serde_json::from_str::<wal2json::Record>(&line);
                         match result_record {
                             Ok(wal2json_record) => {
-                                //println!("rec {:?}", wal2json_record);
                                 // Update subscriptions if needed
                                 realtime::update_subscriptions(
                                     &wal2json_record,
@@ -360,7 +359,6 @@ fn process_record<'a>(
             let mut delegate_to_sql_filters = vec![];
 
             for sub in entity_role_subscriptions {
-                //println!("sub: {:?}", sub);
                 match filters::record::user_defined::visible_through_filters(
                     &sub.filters,
                     rec.columns.as_ref().unwrap_or(&vec![]),
@@ -401,8 +399,6 @@ fn process_record<'a>(
                 }
             }
 
-            //println!("through filters {:?}", visible_through_filters);
-
             // Row Level Security
             let subscriptions_to_notify: Vec<&realtime::Subscription> = match (
                 is_rls_enabled && visible_through_filters.len() > 0,
@@ -428,8 +424,6 @@ fn process_record<'a>(
                     }
                 }
             };
-
-            //println!("notify {:?}", subscriptions_to_notify);
 
             let r = realtime::WALRLS {
                 wal: realtime::Data {
