@@ -355,75 +355,84 @@ fn process_record<'a>(
                 });
 
             // User Defined Filters
-            let mut visible_through_filters = vec![];
-            let mut delegate_to_sql_filters = vec![];
+            let subscriptions_to_notify: Vec<&realtime::Subscription>;
 
-            for sub in entity_role_subscriptions {
-                match filters::record::user_defined::visible_through_filters(
-                    &sub.filters,
-                    rec.columns.as_ref().unwrap_or(&vec![]),
-                ) {
-                    Ok(true) => {
-                        //debug!("Filters handled in rust: {:?}", &sub.filters);
-                        visible_through_filters.push(sub);
-                    }
-                    Ok(false) => (),
-                    // delegate to SQL when we can't handle the comparison in rust
-                    Err(errors::FilterError::DelegateToSQL(_)) => {
-                        //debug!(
-                        //    "Filters delegated to SQL: {:?}. Error: {}",
-                        //    &sub.filters, err
-                        //);
-                        delegate_to_sql_filters.push(sub);
-                    }
+            match vec![realtime::Action::DELETE, realtime::Action::TRUNCATE].contains(&action) {
+                true => {
+                    subscriptions_to_notify = entity_role_subscriptions;
                 }
-            }
+                false => {
+                    let mut visible_through_filters = vec![];
+                    let mut delegate_to_sql_filters = vec![];
 
-            if delegate_to_sql_filters.len() > 0 {
-                match filters::record::user_defined::is_visible_through_filters_sql(
-                    &walcols,
-                    &delegate_to_sql_filters.iter().map(|x| x.id).collect(),
-                    conn,
-                ) {
-                    Ok(sub_ids) => {
-                        for sub in delegate_to_sql_filters
-                            .iter()
-                            .filter(|x| sub_ids.contains(&x.id))
-                        {
-                            visible_through_filters.push(sub)
+                    for sub in entity_role_subscriptions {
+                        match filters::record::user_defined::visible_through_filters(
+                            &sub.filters,
+                            rec.columns.as_ref().unwrap_or(&vec![]),
+                        ) {
+                            Ok(true) => {
+                                //debug!("Filters handled in rust: {:?}", &sub.filters);
+                                visible_through_filters.push(sub);
+                            }
+                            Ok(false) => (),
+                            // delegate to SQL when we can't handle the comparison in rust
+                            Err(errors::FilterError::DelegateToSQL(_)) => {
+                                //debug!(
+                                //    "Filters delegated to SQL: {:?}. Error: {}",
+                                //    &sub.filters, err
+                                //);
+                                delegate_to_sql_filters.push(sub);
+                            }
+                        }
+
+                        if delegate_to_sql_filters.len() > 0 {
+                            match filters::record::user_defined::is_visible_through_filters_sql(
+                                &walcols,
+                                &delegate_to_sql_filters.iter().map(|x| x.id).collect(),
+                                conn,
+                            ) {
+                                Ok(sub_ids) => {
+                                    for sub in delegate_to_sql_filters
+                                        .iter()
+                                        .filter(|x| sub_ids.contains(&x.id))
+                                    {
+                                        visible_through_filters.push(sub)
+                                    }
+                                }
+                                Err(err) => {
+                                    error!("Failed to deletegate some filters to SQL: {}", err)
+                                }
+                            }
                         }
                     }
-                    Err(err) => {
-                        error!("Failed to deletegate some filters to SQL: {}", err)
-                    }
+
+                    // Row Level Security
+                    subscriptions_to_notify = match is_rls_enabled {
+                        false => visible_through_filters,
+                        true => match visible_through_filters.len() > 0 {
+                            true => {
+                                match filters::record::row_level_security::is_visible_through_rls(
+                                    table_oid,
+                                    &walcols,
+                                    &visible_through_filters.iter().map(|x| x.id).collect(),
+                                    conn,
+                                ) {
+                                    Ok(sub_ids) => visible_through_filters
+                                        .iter()
+                                        .filter(|x| sub_ids.contains(&x.id))
+                                        .map(|x| *x)
+                                        .collect(),
+                                    Err(err) => {
+                                        error!("Failed to delegate RLS to SQL: {}", err);
+                                        vec![]
+                                    }
+                                }
+                            }
+                            false => vec![],
+                        },
+                    };
                 }
             }
-
-            // Row Level Security
-            let subscriptions_to_notify: Vec<&realtime::Subscription> = match (
-                is_rls_enabled && visible_through_filters.len() > 0,
-                vec![realtime::Action::DELETE, realtime::Action::TRUNCATE].contains(&action),
-            ) {
-                (false, _) | (true, true) => visible_through_filters,
-                _ => {
-                    match filters::record::row_level_security::is_visible_through_rls(
-                        table_oid,
-                        &walcols,
-                        &visible_through_filters.iter().map(|x| x.id).collect(),
-                        conn,
-                    ) {
-                        Ok(sub_ids) => visible_through_filters
-                            .iter()
-                            .filter(|x| sub_ids.contains(&x.id))
-                            .map(|x| *x)
-                            .collect(),
-                        Err(err) => {
-                            error!("Failed to delegate RLS to SQL: {}", err);
-                            vec![]
-                        }
-                    }
-                }
-            };
 
             let r = realtime::WALRLS {
                 wal: realtime::Data {
@@ -948,8 +957,6 @@ mod tests {
 
     #[test]
     fn test_quoted_type_schema_and_table() {
-        // TODO: Add user defined filter to make sure delegate to sql works
-
         let mut conn = establish_connection();
         crate::sql::migrations::run_migrations(&mut conn)
             .expect("Pending migrations failed to execute");
@@ -1073,5 +1080,456 @@ mod tests {
         }];
 
         assert_eq!(walrus_output, expected);
+    }
+
+    #[test]
+    fn test_integration() {
+        let mut conn = establish_connection();
+        crate::sql::migrations::run_migrations(&mut conn)
+            .expect("Pending migrations failed to execute");
+        create_auth_schema(&mut conn);
+        truncate("realtime", "subscription", &mut conn);
+        create_publication_for_all_tables("supabase_multiplayer", &mut conn);
+
+        create_role("authenticated", &mut conn);
+
+        drop_table("public", "notes_integ", &mut conn);
+        diesel::sql_query(
+            "
+            create table if not exists public.notes_integ(
+                id int primary key,
+                body text
+            );",
+        )
+        .execute(&mut conn)
+        .unwrap();
+
+        diesel::sql_query("alter table public.notes_integ replica identity full;")
+            .execute(&mut conn)
+            .unwrap();
+
+        let rls_excluded_auth_uid = uuid::uuid!("876286ab-4a4e-47df-9c08-a91054c87e1d");
+
+        diesel::sql_query(format!(
+            "create policy rls_note_integ_select
+            on public.notes_integ
+            to authenticated
+            using (auth.uid() <> '{rls_excluded_auth_uid}');"
+        ))
+        .execute(&mut conn)
+        .unwrap();
+
+        diesel::sql_query("alter table public.notes_integ enable row level security;")
+            .execute(&mut conn)
+            .unwrap();
+
+        let notes_oid =
+            crate::filters::table::table_oid::get_table_oid("public", "notes_integ", &mut conn)
+                .unwrap();
+
+        grant_all_on_schema("public", "authenticated", &mut conn);
+
+        diesel::sql_query("revoke select on public.notes_integ from authenticated;")
+            .execute(&mut conn)
+            .unwrap();
+
+        diesel::sql_query("grant select (id) on public.notes_integ to authenticated;")
+            .execute(&mut conn)
+            .unwrap();
+
+        // Superuser
+        let postgres_sub_id = uuid::uuid!("37c7e506-9eca-4671-8c48-526d404660ce");
+        insert_into(subscription)
+            .values((
+                subscription_id.eq(postgres_sub_id),
+                entity.eq(notes_oid),
+                claims.eq(json!({
+                    "role": "postgres",
+                    "email": "example@example.com",
+                    "sub": uuid::Uuid::new_v4(),
+                })),
+            ))
+            .execute(&mut conn)
+            .unwrap();
+
+        // Authenticated: No filter
+        let authenticated_no_filter_sub_id = uuid::uuid!("6257552a-76c6-433c-8777-44cfb00851f9");
+        insert_into(subscription)
+            .values((
+                subscription_id.eq(authenticated_no_filter_sub_id),
+                entity.eq(notes_oid),
+                claims.eq(json!({
+                    "role": "authenticated",
+                    "email": "example@example.com",
+                    "sub": uuid::Uuid::new_v4(),
+                })),
+            ))
+            .execute(&mut conn)
+            .unwrap();
+
+        // Authenticated: Filter match
+        let authenticated_filter_match_sub_id = uuid::uuid!("3e31b5e1-828a-404b-9f06-4b6e0826b027");
+        insert_into(subscription)
+            .values((
+                subscription_id.eq(authenticated_filter_match_sub_id),
+                entity.eq(notes_oid),
+                claims.eq(json!({
+                    "role": "authenticated",
+                    "email": "example@example.com",
+                    "sub": uuid::Uuid::new_v4(),
+                })),
+                filters.eq(vec![UserDefinedFilter {
+                    column_name: "id".to_string(),
+                    op: realtime::Op::Equal,
+                    value: "1".to_string(),
+                }]),
+            ))
+            .execute(&mut conn)
+            .unwrap();
+
+        // Authenticated: Filter no match
+        let authenticated_filter_no_match_sub_id =
+            uuid::uuid!("086145fd-1598-451c-9f00-a38b0d9c7a7e");
+        insert_into(subscription)
+            .values((
+                subscription_id.eq(authenticated_filter_no_match_sub_id),
+                entity.eq(notes_oid),
+                claims.eq(json!({
+                    "role": "authenticated",
+                    "email": "example@example.com",
+                    "sub": uuid::Uuid::new_v4(),
+                })),
+                filters.eq(vec![UserDefinedFilter {
+                    column_name: "id".to_string(),
+                    op: realtime::Op::Equal,
+                    value: "999".to_string(),
+                }]),
+            ))
+            .execute(&mut conn)
+            .unwrap();
+
+        // Authenticated: User excluded by RLS policy
+        let authenticated_filter_rls_exclude_sub_id =
+            uuid::uuid!("54249b4a-98ca-4941-8af7-0154123df504");
+        insert_into(subscription)
+            .values((
+                subscription_id.eq(authenticated_filter_rls_exclude_sub_id),
+                entity.eq(notes_oid),
+                claims.eq(json!({
+                    "role": "authenticated",
+                    "email": "example@example.com",
+                    "sub": rls_excluded_auth_uid,
+                })),
+            ))
+            .execute(&mut conn)
+            .unwrap();
+
+        let subscriptions = subscription.load::<Subscription>(&mut conn).unwrap();
+
+        let note_id: i32 = 1;
+
+        {
+            // INSERT
+
+            diesel::sql_query(format!(
+                "insert into public.notes_integ( id, body) values (1, 'starting body');"
+            ))
+            .execute(&mut conn)
+            .unwrap();
+
+            let wal2json_insert = r#"{
+                "action":"I",
+                "timestamp":"2022-07-13 13:46:35.021414+00",
+                "schema":"public",
+                "table":"notes_integ",
+                "columns":[
+                    {"name":"id","type":"integer","typeoid":23,"value":1},
+                    {"name":"body","type":"text","typeoid":25,"value":"starting body"}
+                ],
+                "pk":[{"name":"id","type":"integer","typeoid":23}]
+            }"#;
+
+            let rec: wal2json::Record = serde_json::from_str(wal2json_insert).unwrap();
+
+            let walrus_output = crate::process_record(
+                &rec,
+                &subscriptions,
+                "supabase_multiplayer",
+                1024 * 1024,
+                &mut conn,
+            )
+            .unwrap();
+
+            let expected = vec![
+                // Record for postgres role
+                realtime::WALRLS {
+                    wal: realtime::Data {
+                        schema: "public",
+                        table: "notes_integ",
+                        r#type: realtime::Action::INSERT,
+                        commit_timestamp: &rec.timestamp,
+                        columns: vec![
+                            realtime::Column {
+                                name: "id".to_string(),
+                                type_: "int4".to_string(),
+                            },
+                            realtime::Column {
+                                name: "body".to_string(),
+                                type_: "text".to_string(),
+                            },
+                        ],
+                        record: HashMap::from([
+                            ("id", json!(note_id)),
+                            ("body", json!("starting body")),
+                        ]),
+                        old_record: None,
+                    },
+                    is_rls_enabled: true,
+                    subscription_ids: vec![postgres_sub_id],
+                    errors: vec![],
+                },
+                // Record for authenticated role
+                realtime::WALRLS {
+                    wal: realtime::Data {
+                        schema: "public",
+                        table: "notes_integ",
+                        r#type: realtime::Action::INSERT,
+                        commit_timestamp: &rec.timestamp,
+                        // body key was excluded
+                        columns: vec![realtime::Column {
+                            name: "id".to_string(),
+                            type_: "int4".to_string(),
+                        }],
+                        record: HashMap::from([("id", json!(note_id))]),
+                        old_record: None,
+                    },
+                    is_rls_enabled: true,
+                    subscription_ids: vec![
+                        authenticated_no_filter_sub_id,
+                        authenticated_filter_match_sub_id,
+                    ],
+                    errors: vec![],
+                },
+            ];
+
+            assert_eq!(walrus_output, expected);
+        }
+
+        {
+            // Update
+
+            diesel::sql_query(format!(
+                "update public.notes_integ set body = 'updated body';"
+            ))
+            .execute(&mut conn)
+            .unwrap();
+
+            let wal2json_update = r#"{
+                "action":"U",
+                "timestamp":"2022-07-13 13:46:35.021414+00",
+                "schema":"public",
+                "table":"notes_integ",
+                "columns":[
+                    {"name":"id","type":"integer","typeoid":23,"value":1},
+                    {"name":"body","type":"text","typeoid":25,"value":"updated body"}
+                ],
+                "identity":[
+                    {"name":"id","type":"integer","typeoid":23,"value":1},
+                    {"name":"body","type":"text","typeoid":25,"value":"starting body"}
+                ],
+                "pk":[
+                    {"name":"id","type":"integer","typeoid":23}
+                ]
+            }"#;
+
+            let rec: wal2json::Record = serde_json::from_str(wal2json_update).unwrap();
+
+            let walrus_output = crate::process_record(
+                &rec,
+                &subscriptions,
+                "supabase_multiplayer",
+                1024 * 1024,
+                &mut conn,
+            )
+            .unwrap();
+
+            let expected = vec![
+                // Record for postgres role
+                realtime::WALRLS {
+                    wal: realtime::Data {
+                        schema: "public",
+                        table: "notes_integ",
+                        r#type: realtime::Action::UPDATE,
+                        commit_timestamp: &rec.timestamp,
+                        columns: vec![
+                            realtime::Column {
+                                name: "id".to_string(),
+                                type_: "int4".to_string(),
+                            },
+                            realtime::Column {
+                                name: "body".to_string(),
+                                type_: "text".to_string(),
+                            },
+                        ],
+                        record: HashMap::from([
+                            ("id", json!(note_id)),
+                            ("body", json!("updated body")),
+                        ]),
+                        old_record: Some(HashMap::from([
+                            ("id", json!(note_id)),
+                            ("body", json!("starting body")),
+                        ])),
+                    },
+                    is_rls_enabled: true,
+                    subscription_ids: vec![postgres_sub_id],
+                    errors: vec![],
+                },
+                // Record for authenticated role
+                realtime::WALRLS {
+                    wal: realtime::Data {
+                        schema: "public",
+                        table: "notes_integ",
+                        r#type: realtime::Action::UPDATE,
+                        commit_timestamp: &rec.timestamp,
+                        // body key was excluded
+                        columns: vec![realtime::Column {
+                            name: "id".to_string(),
+                            type_: "int4".to_string(),
+                        }],
+                        record: HashMap::from([("id", json!(note_id))]),
+                        old_record: Some(HashMap::from([("id", json!(note_id))])),
+                    },
+                    is_rls_enabled: true,
+                    subscription_ids: vec![
+                        authenticated_no_filter_sub_id,
+                        authenticated_filter_match_sub_id,
+                    ],
+                    errors: vec![],
+                },
+            ];
+
+            assert_eq!(walrus_output, expected);
+        }
+
+        {
+            // Delete
+
+            diesel::sql_query(format!("delete from public.notes_integ;"))
+                .execute(&mut conn)
+                .unwrap();
+
+            let wal2json_delete = r#"{
+                "action":"D",
+                "timestamp":"2022-07-13 13:46:35.021414+00",
+                "schema":"public",
+                "table":"notes_integ",
+                "identity":[
+                    {"name":"id","type":"integer","typeoid":23,"value":1},
+                    {"name":"body","type":"text","typeoid":25,"value":"updated body"}
+                ],
+                "pk":[
+                    {"name":"id","type":"integer","typeoid":23}
+                ]
+            }"#;
+
+            let rec: wal2json::Record = serde_json::from_str(wal2json_delete).unwrap();
+
+            let walrus_output = crate::process_record(
+                &rec,
+                &subscriptions,
+                "supabase_multiplayer",
+                1024 * 1024,
+                &mut conn,
+            )
+            .unwrap();
+
+            let expected = vec![
+                // Record for postgres role
+                realtime::WALRLS {
+                    wal: realtime::Data {
+                        schema: "public",
+                        table: "notes_integ",
+                        r#type: realtime::Action::DELETE,
+                        commit_timestamp: &rec.timestamp,
+                        columns: vec![
+                            realtime::Column {
+                                name: "id".to_string(),
+                                type_: "int4".to_string(),
+                            },
+                            realtime::Column {
+                                name: "body".to_string(),
+                                type_: "text".to_string(),
+                            },
+                        ],
+                        record: HashMap::new(),
+                        old_record: Some(HashMap::from([
+                            ("id", json!(note_id)),
+                            ("body", json!("updated body")),
+                        ])),
+                    },
+                    is_rls_enabled: true,
+                    subscription_ids: vec![postgres_sub_id],
+                    errors: vec![],
+                },
+                // Record for authenticated role
+                realtime::WALRLS {
+                    wal: realtime::Data {
+                        schema: "public",
+                        table: "notes_integ",
+                        r#type: realtime::Action::DELETE,
+                        commit_timestamp: &rec.timestamp,
+                        // body key was excluded
+                        columns: vec![realtime::Column {
+                            name: "id".to_string(),
+                            type_: "int4".to_string(),
+                        }],
+                        record: HashMap::new(),
+                        old_record: Some(HashMap::from([("id", json!(note_id))])),
+                    },
+                    is_rls_enabled: true,
+                    subscription_ids: vec![
+                        authenticated_no_filter_sub_id,
+                        authenticated_filter_match_sub_id,
+                        // the non-matching filter subscriber is included
+                        authenticated_filter_no_match_sub_id,
+                        // the rls excluded subscriber is also included
+                        authenticated_filter_rls_exclude_sub_id,
+                    ],
+                    errors: vec![],
+                },
+            ];
+
+            assert_eq!(walrus_output, expected);
+        }
+
+        {
+            // Truncate
+            diesel::sql_query(format!("truncate table public.notes_integ;"))
+                .execute(&mut conn)
+                .unwrap();
+
+            let wal2json_truncate = r#"{
+                "action":"T",
+                "timestamp":"2022-07-13 13:46:35.021414+00",
+                "schema":"public",
+                "table":"notes_integ"
+            }"#;
+
+            let rec: wal2json::Record = serde_json::from_str(wal2json_truncate).unwrap();
+
+            let walrus_output = crate::process_record(
+                &rec,
+                &subscriptions,
+                "supabase_multiplayer",
+                1024 * 1024,
+                &mut conn,
+            )
+            .unwrap();
+
+            // truncates do not broadcast
+            let expected = vec![];
+
+            assert_eq!(walrus_output, expected);
+        }
     }
 }
