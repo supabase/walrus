@@ -17,7 +17,6 @@ pub mod sql_functions {
 pub fn is_visible_through_filters_sql(
     columns: &Vec<walrus::Column>,
     ids: &Vec<i64>,
-    // TODO: convert this to use subscription_ids to reduce n calls
     conn: &mut PgConnection,
 ) -> Result<Vec<i64>, String> {
     select(sql_functions::is_visible_through_filters(

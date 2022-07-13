@@ -191,7 +191,7 @@ async fn read_stdin(tx: futures_channel::mpsc::UnboundedSender<Message>, topic: 
 
 async fn heartbeat(tx: futures_channel::mpsc::UnboundedSender<Message>) {
     loop {
-        sleep(Duration::from_secs(20)).await;
+        sleep(Duration::from_secs(30)).await;
         let phoenix_msg = PhoenixMessage {
             event: PhoenixMessageEvent::Heartbeat,
             payload: serde_json::json!({"msg": "ping"}),
