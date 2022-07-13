@@ -141,7 +141,9 @@ pub fn update_subscriptions(
                     subscriptions.push(new_sub);
                     debug!("Subscription inserted. Total {}", subscriptions.len());
                 }
-                Err(err) => error!("No subscription found: id={}, Error: {} ", id_val, err),
+                Err(err) => {
+                    error!("No subscription found: id={}, Error: {} ", id_val, err);
+                }
             };
         }
         wal2json::Action::U => {
@@ -263,5 +265,231 @@ impl FromSql<UserDefinedFilterType, Pg> for UserDefinedFilter {
             op,
             value,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate diesel;
+    use crate::models::realtime::*;
+    use crate::models::{realtime, wal2json};
+    use crate::tests::*;
+    use chrono::Utc;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+    use uuid;
+
+    #[test]
+    fn test_update_subscriptions_insert() {
+        let mut conn = establish_connection();
+
+        crate::sql::migrations::run_migrations(&mut conn)
+            .expect("Pending migrations failed to execute");
+
+        crate::tests::truncate("realtime", "subscription", &mut conn);
+
+        let subscriptions_table_oid =
+            crate::filters::table::table_oid::get_table_oid("realtime", "subscription", &mut conn)
+                .unwrap();
+
+        let mut subscriptions = vec![];
+
+        let sub_id = uuid::uuid!("54249b4a-98ca-4941-8af7-0154123df504");
+
+        insert_into(subscription)
+            .values((
+                subscription_id.eq(sub_id),
+                entity.eq(subscriptions_table_oid),
+                claims.eq(json!({
+                    "role": "postgres",
+                    "email": "example@example.com",
+                    "sub": sub_id,
+                })),
+            ))
+            .execute(&mut conn)
+            .unwrap();
+
+        let subscription_row = subscription
+            .first::<realtime::Subscription>(&mut conn)
+            .unwrap();
+        let subscription_row_id = subscription_row.id;
+
+        let wal2json = format!(
+            r#"{{
+            "action":"I",
+            "timestamp":"2022-07-13 17:04:40.784361+00",
+            "schema":"realtime",
+            "table":"subscription",
+            "columns":[
+                {{
+                    "name":"id",
+                    "type":"bigint",
+                    "typeoid":20,
+                    "value":{subscription_row_id}
+                }}
+            ],
+            "pk":[{{"name":"id","type":"bigint","typeoid":20}}]
+        }}"#
+        );
+
+        let rec: wal2json::Record = serde_json::from_str(&wal2json).unwrap();
+        update_subscriptions(&rec, &mut subscriptions, &mut conn);
+
+        // Subscription was added
+        assert_eq!(subscriptions, vec![subscription_row]);
+    }
+
+    #[test]
+    fn test_update_subscriptions_update() {
+        let mut conn = establish_connection();
+
+        crate::sql::migrations::run_migrations(&mut conn)
+            .expect("Pending migrations failed to execute");
+
+        crate::tests::truncate("realtime", "subscription", &mut conn);
+
+        let subscriptions_table_oid =
+            crate::filters::table::table_oid::get_table_oid("realtime", "subscription", &mut conn)
+                .unwrap();
+
+        let sub_id = uuid::uuid!("54249b4a-98ca-4941-8af7-0154123df504");
+
+        insert_into(subscription)
+            .values((
+                subscription_id.eq(sub_id),
+                entity.eq(subscriptions_table_oid),
+                claims.eq(json!({
+                    "role": "postgres",
+                    "email": "example@example.com",
+                    "sub": sub_id,
+                })),
+            ))
+            .execute(&mut conn)
+            .unwrap();
+
+        let subscription_row = subscription
+            .first::<realtime::Subscription>(&mut conn)
+            .unwrap();
+        let subscription_row_id = subscription_row.id;
+
+        let mut subscriptions = vec![subscription_row.clone()];
+
+        // Update the subscription id
+        let updated_sub_id = uuid::uuid!("54249b4a-98ca-4941-8af7-0154123df504");
+        diesel::sql_query(format!(
+            "update realtime.subscription set subscription_id = '{updated_sub_id}'"
+        ))
+        .execute(&mut conn)
+        .unwrap();
+
+        let wal2json = format!(
+            r#"{{
+            "action":"U",
+            "timestamp":"2022-07-13 17:04:40.784361+00",
+            "schema":"realtime",
+            "table":"subscription",
+            "columns":[
+                {{
+                    "name":"id",
+                    "type":"bigint",
+                    "typeoid":20,
+                    "value":{subscription_row_id}
+                }}
+            ],
+            "pk":[{{"name":"id","type":"bigint","typeoid":20}}]
+        }}"#
+        );
+
+        let rec: wal2json::Record = serde_json::from_str(&wal2json).unwrap();
+        update_subscriptions(&rec, &mut subscriptions, &mut conn);
+
+        assert_eq!(subscriptions[0].subscription_id, updated_sub_id);
+    }
+
+    #[test]
+    fn test_update_subscriptions_delete() {
+        let mut conn = establish_connection();
+
+        crate::sql::migrations::run_migrations(&mut conn)
+            .expect("Pending migrations failed to execute");
+
+        crate::tests::truncate("realtime", "subscription", &mut conn);
+
+        let subscription_row_id = 1;
+
+        let mut subscriptions = vec![realtime::Subscription {
+            id: subscription_row_id,
+            subscription_id: uuid::uuid!("54249b4a-98ca-4941-8af7-0154123df504"),
+            entity: 999,
+            filters: vec![],
+            claims: json!({}),
+            claims_role: 999,
+            schema_name: "abc".to_string(),
+            table_name: "abc".to_string(),
+            claims_role_name: "abc".to_string(),
+            created_at: Utc::now().naive_utc(),
+        }];
+
+        let wal2json = format!(
+            r#"{{
+            "action":"D",
+            "timestamp":"2022-07-13 17:04:40.784361+00",
+            "schema":"realtime",
+            "table":"subscription",
+            "identity":[
+                {{
+                    "name":"id",
+                    "type":"bigint",
+                    "typeoid":20,
+                    "value":{subscription_row_id}
+                }}
+            ],
+            "pk":[{{"name":"id","type":"bigint","typeoid":20}}]
+        }}"#
+        );
+
+        let rec: wal2json::Record = serde_json::from_str(&wal2json).unwrap();
+        update_subscriptions(&rec, &mut subscriptions, &mut conn);
+
+        assert_eq!(subscriptions, vec![]);
+    }
+
+    #[test]
+    fn test_update_subscriptions_truncate() {
+        let mut conn = establish_connection();
+
+        crate::sql::migrations::run_migrations(&mut conn)
+            .expect("Pending migrations failed to execute");
+
+        crate::tests::truncate("realtime", "subscription", &mut conn);
+
+        let subscription_row_id = 1;
+
+        let mut subscriptions = vec![realtime::Subscription {
+            id: subscription_row_id,
+            subscription_id: uuid::uuid!("54249b4a-98ca-4941-8af7-0154123df504"),
+            entity: 999,
+            filters: vec![],
+            claims: json!({}),
+            claims_role: 999,
+            schema_name: "abc".to_string(),
+            table_name: "abc".to_string(),
+            claims_role_name: "abc".to_string(),
+            created_at: Utc::now().naive_utc(),
+        }];
+
+        let wal2json = format!(
+            r#"{{
+            "action":"T",
+            "timestamp":"2022-07-13 17:04:40.784361+00",
+            "schema":"realtime",
+            "table":"subscription"
+        }}"#
+        );
+
+        let rec: wal2json::Record = serde_json::from_str(&wal2json).unwrap();
+        update_subscriptions(&rec, &mut subscriptions, &mut conn);
+
+        assert_eq!(subscriptions, vec![]);
     }
 }

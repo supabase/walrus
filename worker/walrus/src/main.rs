@@ -468,7 +468,7 @@ mod tests {
     use crate::models::{realtime, wal2json};
     use crate::realtime::{Subscription, UserDefinedFilter};
     use crate::sql::schema::realtime::subscription::dsl::*;
-    use chrono::{TimeZone, Utc};
+    use chrono::Utc;
     use diesel::prelude::*;
     use diesel::*;
     use pretty_assertions::assert_eq;
@@ -481,7 +481,7 @@ mod tests {
     //const INT8OID: i32 = 20;
     //const TEXTOID: i32 = 25;
 
-    fn establish_connection() -> PgConnection {
+    pub fn establish_connection() -> PgConnection {
         let database_url = "postgresql://postgres:password@localhost:5501/postgres";
         PgConnection::establish(&database_url).unwrap()
     }
@@ -543,7 +543,7 @@ mod tests {
         .unwrap();
     }
 
-    fn truncate(schema: &str, table: &str, conn: &mut PgConnection) {
+    pub fn truncate(schema: &str, table: &str, conn: &mut PgConnection) {
         diesel::sql_query(format!("truncate table \"{}\".\"{}\";", schema, table))
             .execute(conn)
             .unwrap();
