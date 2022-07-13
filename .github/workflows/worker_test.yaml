@@ -14,7 +14,7 @@ jobs:
 
     services:
       postgres:
-        image: supabase/postgres:lastest
+        image: supabase/postgres:latest
         env:
           POSTGRES_DB: postgres
           POSTGRES_HOST: localhost
