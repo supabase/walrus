@@ -1,0 +1,45 @@
+name: WALRUS tests
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+
+jobs:
+  autotests:
+    name: Run tests
+
+    runs-on: ubuntu-latest
+    container:
+      image: supabase/postgres:latest
+      options: --tmpfs=/pgtmpfs -e PGDATA=/pgtmpfs
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Checkout wal2json
+        uses: actions/checkout@v3
+        with:
+          repository: eulerto/wal2json
+          ref: master
+          path: ./wal2json
+
+      - name: Run Test
+        run: |
+          # install wal2json
+          cd wal2json
+          apt-get update && apt-get install build-essential postgresql-server-dev-14 -y
+          make
+          make install
+          # run tests
+          cd ..
+          chown -R postgres /__w/walrus/walrus
+          su postgres -c 'bin/installcheck'
+
+      - uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: regression.out
+          path: regression.out
+          retention-days: 7
