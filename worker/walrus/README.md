@@ -48,7 +48,6 @@ Clone and Navigate
 ```sh
 git clone https://github.com/supabase/walrus.git
 cd walrus
-git checkout worker
 cd worker
 ```
 
@@ -134,3 +133,12 @@ Now, looking back out the output from the `cargo run` command, you see the follo
 ## Possible Enhancements
 
 - Rate limiting
+
+
+## Testing
+
+```
+cd worker
+docker-compose up
+cargo test -- --test-threads=1
+```
