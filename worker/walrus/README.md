@@ -12,6 +12,7 @@ USAGE:
 OPTIONS:
         --connection <CONNECTION>    [default: postgresql://postgres@localhost:5432/postgres]
     -h, --help                       Print help information
+        --pubilcation <PUBLICATION>  [default: supabase_multiplayer]
         --slot <SLOT>                [default: realtime]
     -V, --version                    Print version information
 ```
@@ -59,10 +60,10 @@ docker-compose up
 Run the walrus worker
 ```sh
 cd walrus
-cargo run -- --connection=postgresql://postgres:password@localhost:5501/postgres
+cargo run -- --connection=postgresql://postgres:password@localhost:5501/postgres --publication=walrus_pub
 
 # Note: if you have jq installed, the output is more readable with
-#    cargo run -- --connection=postgresql://postgres:password@localhost:5501/postgres | jq
+#    cargo run -- --connection=postgresql://postgres:password@localhost:5501/postgres --publication=walrus_pub | jq
 ```
 
 Connect to the database at `postgresql://postgres:password@localhost:5501/postgres`
@@ -75,6 +76,8 @@ create table book(
     id int primary key,
     title text
 );
+
+create publication walrus_pub for all tables;
 
 -- Create a dummy subscription to our new table
 insert into realtime.subscription(subscription_id, entity, claims)
@@ -95,7 +98,7 @@ values (1, 'Foo');
 
 Now, looking back out the output from the `cargo run` command, you see the following printed to stdout
 ```json
-> cargo run -- --connection=postgresql://postgres:password@localhost:5501/postgres
+> cargo run -- --connection=postgresql://postgres:password@localhost:5501/postgres --publication=walrus_pub
 ...
 {
    "wal":{
@@ -131,6 +134,3 @@ Now, looking back out the output from the `cargo run` command, you see the follo
 ## Possible Enhancements
 
 - Rate limiting
-- Some work that is currently being performed in SQL could be shuffled out rust for a performance improvement
-    - Reshaping the WAL records
-    - Any state we want to track between calls to `realtime.apply_rls`
