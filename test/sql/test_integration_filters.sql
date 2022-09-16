@@ -28,6 +28,7 @@ from
 select clear_wal();
 insert into public.notes(id, body) values (1, 'bbb');
 
+delete from public.notes;
 
 select subscription_id, filters from realtime.subscription;
 
