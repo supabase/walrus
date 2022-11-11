@@ -197,12 +197,12 @@ Ex:
 ```
 
 ### Error 413: Payload Too Large
-When the size of the wal2json record exceeds `max_record_bytes` the `record` and `old_record` keys are set as empty objects `{}` and the `errors` output array will contain the string `"Error 413: Payload Too Large"`
+When the size of the wal2json record exceeds `max_record_bytes` the `record` and `old_record` objects are filtered to include only fields with a value size <= 64 bytes. The `errors` output array is set to contain the string `"Error 413: Payload Too Large"`.
 
 Ex:
 ```sql
 (
-    {..., "record": {}, "old_record": {}}, -- wal
+    {..., "record": {"id": 1}, "old_record": {"id": 1}}, -- wal
     true,                                  -- is_rls_enabled
     [...],                                 -- subscription_ids,
     array['Error 413: Payload Too Large']  -- errors
@@ -325,7 +325,7 @@ where
 
 ### max_record_bytes
 
-`max_record_bytes` (default 1MB): Controls the maximum size of a WAL record that will be emitted with complete `record` and `old_record` data. When the size of the wal2json record exceeds `max_record_bytes` the `record` and `old_record` keys are set as empty objects `{}` and the `errors` output array will contain the string `"Error 413: Payload Too Large"`
+`max_record_bytes` (default 1MB): Controls the maximum size of a WAL record that will be emitted with complete `record` and `old_record` data. When the size of the wal2json record exceeds `max_record_bytes` the `record` and `old_record` objects are filtered to include only fields with a value size <= 64 bytes. The `errors` output array is set to contain the string `"Error 413: Payload Too Large"`.
 
 Ex:
 ```sql
