@@ -46,7 +46,7 @@ create type realtime.user_defined_filter as (
 and `realtime.equality_op`s are a subset of [postgrest ops](https://postgrest.org/en/v4.1/api.html#horizontal-filtering-rows). Specifically:
 ```sql
 create type realtime.equality_op as enum(
-    'eq', 'neq', 'lt', 'lte', 'gt', 'gte'
+    'eq', 'neq', 'lt', 'lte', 'gt', 'gte', 'in'
 );
 ```
 
