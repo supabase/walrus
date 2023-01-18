@@ -40,6 +40,17 @@ select
 from
    walrus;
 
+-- Confirm that filtering on `in` more than 100 entries throws an error
+insert into realtime.subscription(subscription_id, entity, claims, filters)
+select
+    seed_uuid(6),
+    'public.notes',
+    jsonb_build_object(
+        'role', 'authenticated',
+        'email', 'example@example.com',
+        'sub', seed_uuid(6)::text
+    ),
+    array[('body', 'in', array[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1])::realtime.user_defined_filter];
 
 drop table public.notes;
 select pg_drop_replication_slot('realtime');

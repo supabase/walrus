@@ -91,6 +91,19 @@ from
  }                                              |                |                                                                                                                  | 
 (2 rows)
 
+-- Confirm that filtering on `in` more than 100 entries throws an error
+insert into realtime.subscription(subscription_id, entity, claims, filters)
+select
+    seed_uuid(6),
+    'public.notes',
+    jsonb_build_object(
+        'role', 'authenticated',
+        'email', 'example@example.com',
+        'sub', seed_uuid(6)::text
+    ),
+    array[('body', 'in', array[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1])::realtime.user_defined_filter];
+ERROR:  too many values for `in` filter. Maximum 100, ["1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1"]s
+CONTEXT:  PL/pgSQL function realtime.subscription_check_filters() line 48 at RAISE
 drop table public.notes;
 select pg_drop_replication_slot('realtime');
  pg_drop_replication_slot 
