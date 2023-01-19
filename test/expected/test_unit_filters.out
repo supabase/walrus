@@ -124,3 +124,15 @@ select realtime.check_equality_op('eq','uuid','639f86b1-738b-43ed-bb09-c8d3f3baf
  f
 (1 row)
 
+select realtime.check_equality_op('in', 'bigint', '2', '{1,2,3}');
+ check_equality_op 
+-------------------
+ t
+(1 row)
+
+select realtime.check_equality_op('in', 'bigint', '4', '{1,2,3}');
+ check_equality_op 
+-------------------
+ f
+(1 row)
+
