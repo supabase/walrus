@@ -92,7 +92,7 @@ begin
         if filter.op = 'in'::realtime.equality_op then
             in_val = realtime.cast(filter.value, (col_type::text || '[]')::regtype);
             if coalesce(jsonb_array_length(in_val), 0) > 100 then
-                raise exception 'too many values for `in` filter. Maximum 100, %s', in_val;
+                raise exception 'too many values for `in` filter. Maximum 100';
             end if;
         end if;
 
