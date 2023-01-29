@@ -2,4 +2,5 @@
 members = [
     "walrus",
     "realtime",
+    "stream_logical",
 ]
