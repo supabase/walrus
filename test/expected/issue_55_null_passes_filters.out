@@ -33,28 +33,28 @@ select
     errors
 from
    walrus;
-                      rec                       | is_rls_enabled | subscription_ids | errors 
-------------------------------------------------+----------------+------------------+--------
- {                                             +| f              | {}               | {}
-     "type": "INSERT",                         +|                |                  | 
-     "table": "notes",                         +|                |                  | 
-     "record": {                               +|                |                  | 
-         "id": 1,                              +|                |                  | 
-         "page_id": 1                          +|                |                  | 
-     },                                        +|                |                  | 
-     "schema": "public",                       +|                |                  | 
-     "columns": [                              +|                |                  | 
-         {                                     +|                |                  | 
-             "name": "id",                     +|                |                  | 
-             "type": "int4"                    +|                |                  | 
-         },                                    +|                |                  | 
-         {                                     +|                |                  | 
-             "name": "page_id",                +|                |                  | 
-             "type": "int4"                    +|                |                  | 
-         }                                     +|                |                  | 
-     ],                                        +|                |                  | 
-     "commit_timestamp": "2000-01-01T00:01:01Z"+|                |                  | 
- }                                              |                |                  | 
+                        rec                         | is_rls_enabled | subscription_ids | errors 
+----------------------------------------------------+----------------+------------------+--------
+ {                                                 +| f              | {}               | {}
+     "type": "INSERT",                             +|                |                  | 
+     "table": "notes",                             +|                |                  | 
+     "record": {                                   +|                |                  | 
+         "id": 1,                                  +|                |                  | 
+         "page_id": 1                              +|                |                  | 
+     },                                            +|                |                  | 
+     "schema": "public",                           +|                |                  | 
+     "columns": [                                  +|                |                  | 
+         {                                         +|                |                  | 
+             "name": "id",                         +|                |                  | 
+             "type": "int4"                        +|                |                  | 
+         },                                        +|                |                  | 
+         {                                         +|                |                  | 
+             "name": "page_id",                    +|                |                  | 
+             "type": "int4"                        +|                |                  | 
+         }                                         +|                |                  | 
+     ],                                            +|                |                  | 
+     "commit_timestamp": "2000-01-01T00:01:01.000Z"+|                |                  | 
+ }                                                  |                |                  | 
 (1 row)
 
 -- Expect 1 subscription: filters do match 5 = 5
@@ -66,28 +66,28 @@ select
     errors
 from
    walrus;
-                      rec                       | is_rls_enabled |            subscription_ids            | errors 
-------------------------------------------------+----------------+----------------------------------------+--------
- {                                             +| f              | {f4539ebe-c779-5788-bbc1-2421ffaa8954} | {}
-     "type": "INSERT",                         +|                |                                        | 
-     "table": "notes",                         +|                |                                        | 
-     "record": {                               +|                |                                        | 
-         "id": 2,                              +|                |                                        | 
-         "page_id": 5                          +|                |                                        | 
-     },                                        +|                |                                        | 
-     "schema": "public",                       +|                |                                        | 
-     "columns": [                              +|                |                                        | 
-         {                                     +|                |                                        | 
-             "name": "id",                     +|                |                                        | 
-             "type": "int4"                    +|                |                                        | 
-         },                                    +|                |                                        | 
-         {                                     +|                |                                        | 
-             "name": "page_id",                +|                |                                        | 
-             "type": "int4"                    +|                |                                        | 
-         }                                     +|                |                                        | 
-     ],                                        +|                |                                        | 
-     "commit_timestamp": "2000-01-01T00:01:01Z"+|                |                                        | 
- }                                              |                |                                        | 
+                        rec                         | is_rls_enabled |            subscription_ids            | errors 
+----------------------------------------------------+----------------+----------------------------------------+--------
+ {                                                 +| f              | {f4539ebe-c779-5788-bbc1-2421ffaa8954} | {}
+     "type": "INSERT",                             +|                |                                        | 
+     "table": "notes",                             +|                |                                        | 
+     "record": {                                   +|                |                                        | 
+         "id": 2,                                  +|                |                                        | 
+         "page_id": 5                              +|                |                                        | 
+     },                                            +|                |                                        | 
+     "schema": "public",                           +|                |                                        | 
+     "columns": [                                  +|                |                                        | 
+         {                                         +|                |                                        | 
+             "name": "id",                         +|                |                                        | 
+             "type": "int4"                        +|                |                                        | 
+         },                                        +|                |                                        | 
+         {                                         +|                |                                        | 
+             "name": "page_id",                    +|                |                                        | 
+             "type": "int4"                        +|                |                                        | 
+         }                                         +|                |                                        | 
+     ],                                            +|                |                                        | 
+     "commit_timestamp": "2000-01-01T00:01:01.000Z"+|                |                                        | 
+ }                                                  |                |                                        | 
 (1 row)
 
 -- Expect 0 subscriptions: filters do match 5 <> null
@@ -99,28 +99,28 @@ select
     errors
 from
    walrus;
-                      rec                       | is_rls_enabled | subscription_ids | errors 
-------------------------------------------------+----------------+------------------+--------
- {                                             +| f              | {}               | {}
-     "type": "INSERT",                         +|                |                  | 
-     "table": "notes",                         +|                |                  | 
-     "record": {                               +|                |                  | 
-         "id": 3,                              +|                |                  | 
-         "page_id": null                       +|                |                  | 
-     },                                        +|                |                  | 
-     "schema": "public",                       +|                |                  | 
-     "columns": [                              +|                |                  | 
-         {                                     +|                |                  | 
-             "name": "id",                     +|                |                  | 
-             "type": "int4"                    +|                |                  | 
-         },                                    +|                |                  | 
-         {                                     +|                |                  | 
-             "name": "page_id",                +|                |                  | 
-             "type": "int4"                    +|                |                  | 
-         }                                     +|                |                  | 
-     ],                                        +|                |                  | 
-     "commit_timestamp": "2000-01-01T00:01:01Z"+|                |                  | 
- }                                              |                |                  | 
+                        rec                         | is_rls_enabled | subscription_ids | errors 
+----------------------------------------------------+----------------+------------------+--------
+ {                                                 +| f              | {}               | {}
+     "type": "INSERT",                             +|                |                  | 
+     "table": "notes",                             +|                |                  | 
+     "record": {                                   +|                |                  | 
+         "id": 3,                                  +|                |                  | 
+         "page_id": null                           +|                |                  | 
+     },                                            +|                |                  | 
+     "schema": "public",                           +|                |                  | 
+     "columns": [                                  +|                |                  | 
+         {                                         +|                |                  | 
+             "name": "id",                         +|                |                  | 
+             "type": "int4"                        +|                |                  | 
+         },                                        +|                |                  | 
+         {                                         +|                |                  | 
+             "name": "page_id",                    +|                |                  | 
+             "type": "int4"                        +|                |                  | 
+         }                                         +|                |                  | 
+     ],                                            +|                |                  | 
+     "commit_timestamp": "2000-01-01T00:01:01.000Z"+|                |                  | 
+ }                                                  |                |                  | 
 (1 row)
 
 drop table public.notes;

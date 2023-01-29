@@ -38,43 +38,43 @@ select
     errors
 from
    walrus;
-                      rec                       | is_rls_enabled |            subscription_ids            | errors 
-------------------------------------------------+----------------+----------------------------------------+--------
- {                                             +| f              | {5211e8ec-8c25-5c7f-9b03-6ff1eac0159e} | {}
-     "type": "INSERT",                         +|                |                                        | 
-     "table": "notes",                         +|                |                                        | 
-     "record": {                               +|                |                                        | 
-         "id": 1,                              +|                |                                        | 
-         "body": "hello"                       +|                |                                        | 
-     },                                        +|                |                                        | 
-     "schema": "public",                       +|                |                                        | 
-     "columns": [                              +|                |                                        | 
-         {                                     +|                |                                        | 
-             "name": "id",                     +|                |                                        | 
-             "type": "int4"                    +|                |                                        | 
-         },                                    +|                |                                        | 
-         {                                     +|                |                                        | 
-             "name": "body",                   +|                |                                        | 
-             "type": "text"                    +|                |                                        | 
-         }                                     +|                |                                        | 
-     ],                                        +|                |                                        | 
-     "commit_timestamp": "2000-01-01T00:01:01Z"+|                |                                        | 
- }                                              |                |                                        | 
- {                                             +| f              | {f4539ebe-c779-5788-bbc1-2421ffaa8954} | {}
-     "type": "INSERT",                         +|                |                                        | 
-     "table": "notes",                         +|                |                                        | 
-     "record": {                               +|                |                                        | 
-         "id": 1                               +|                |                                        | 
-     },                                        +|                |                                        | 
-     "schema": "public",                       +|                |                                        | 
-     "columns": [                              +|                |                                        | 
-         {                                     +|                |                                        | 
-             "name": "id",                     +|                |                                        | 
-             "type": "int4"                    +|                |                                        | 
-         }                                     +|                |                                        | 
-     ],                                        +|                |                                        | 
-     "commit_timestamp": "2000-01-01T00:01:01Z"+|                |                                        | 
- }                                              |                |                                        | 
+                        rec                         | is_rls_enabled |            subscription_ids            | errors 
+----------------------------------------------------+----------------+----------------------------------------+--------
+ {                                                 +| f              | {5211e8ec-8c25-5c7f-9b03-6ff1eac0159e} | {}
+     "type": "INSERT",                             +|                |                                        | 
+     "table": "notes",                             +|                |                                        | 
+     "record": {                                   +|                |                                        | 
+         "id": 1,                                  +|                |                                        | 
+         "body": "hello"                           +|                |                                        | 
+     },                                            +|                |                                        | 
+     "schema": "public",                           +|                |                                        | 
+     "columns": [                                  +|                |                                        | 
+         {                                         +|                |                                        | 
+             "name": "id",                         +|                |                                        | 
+             "type": "int4"                        +|                |                                        | 
+         },                                        +|                |                                        | 
+         {                                         +|                |                                        | 
+             "name": "body",                       +|                |                                        | 
+             "type": "text"                        +|                |                                        | 
+         }                                         +|                |                                        | 
+     ],                                            +|                |                                        | 
+     "commit_timestamp": "2000-01-01T00:01:01.000Z"+|                |                                        | 
+ }                                                  |                |                                        | 
+ {                                                 +| f              | {f4539ebe-c779-5788-bbc1-2421ffaa8954} | {}
+     "type": "INSERT",                             +|                |                                        | 
+     "table": "notes",                             +|                |                                        | 
+     "record": {                                   +|                |                                        | 
+         "id": 1                                   +|                |                                        | 
+     },                                            +|                |                                        | 
+     "schema": "public",                           +|                |                                        | 
+     "columns": [                                  +|                |                                        | 
+         {                                         +|                |                                        | 
+             "name": "id",                         +|                |                                        | 
+             "type": "int4"                        +|                |                                        | 
+         }                                         +|                |                                        | 
+     ],                                            +|                |                                        | 
+     "commit_timestamp": "2000-01-01T00:01:01.000Z"+|                |                                        | 
+ }                                                  |                |                                        | 
 (2 rows)
 
 drop table public.notes;

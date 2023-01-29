@@ -42,27 +42,27 @@ select
     errors
 from
    walrus;
-                      rec                       | is_rls_enabled |            subscription_ids            | errors 
-------------------------------------------------+----------------+----------------------------------------+--------
- {                                             +| f              | {f4539ebe-c779-5788-bbc1-2421ffaa8954} | {}
-     "type": "DELETE",                         +|                |                                        | 
-     "table": "notes",                         +|                |                                        | 
-     "schema": "public",                       +|                |                                        | 
-     "columns": [                              +|                |                                        | 
-         {                                     +|                |                                        | 
-             "name": "pk1",                    +|                |                                        | 
-             "type": "int4"                    +|                |                                        | 
-         },                                    +|                |                                        | 
-         {                                     +|                |                                        | 
-             "name": "body",                   +|                |                                        | 
-             "type": "text"                    +|                |                                        | 
-         }                                     +|                |                                        | 
-     ],                                        +|                |                                        | 
-     "old_record": {                           +|                |                                        | 
-         "pk1": 1                              +|                |                                        | 
-     },                                        +|                |                                        | 
-     "commit_timestamp": "2000-01-01T00:01:01Z"+|                |                                        | 
- }                                              |                |                                        | 
+                        rec                         | is_rls_enabled |            subscription_ids            | errors 
+----------------------------------------------------+----------------+----------------------------------------+--------
+ {                                                 +| f              | {f4539ebe-c779-5788-bbc1-2421ffaa8954} | {}
+     "type": "DELETE",                             +|                |                                        | 
+     "table": "notes",                             +|                |                                        | 
+     "schema": "public",                           +|                |                                        | 
+     "columns": [                                  +|                |                                        | 
+         {                                         +|                |                                        | 
+             "name": "pk1",                        +|                |                                        | 
+             "type": "int4"                        +|                |                                        | 
+         },                                        +|                |                                        | 
+         {                                         +|                |                                        | 
+             "name": "body",                       +|                |                                        | 
+             "type": "text"                        +|                |                                        | 
+         }                                         +|                |                                        | 
+     ],                                            +|                |                                        | 
+     "old_record": {                               +|                |                                        | 
+         "pk1": 1                                  +|                |                                        | 
+     },                                            +|                |                                        | 
+     "commit_timestamp": "2000-01-01T00:01:01.000Z"+|                |                                        | 
+ }                                                  |                |                                        | 
 (1 row)
 
 -- Option 2:
@@ -87,27 +87,27 @@ select
     errors
 from
    walrus;
-                      rec                       | is_rls_enabled |            subscription_ids            | errors 
-------------------------------------------------+----------------+----------------------------------------+--------
- {                                             +| t              | {f4539ebe-c779-5788-bbc1-2421ffaa8954} | {}
-     "type": "DELETE",                         +|                |                                        | 
-     "table": "notes",                         +|                |                                        | 
-     "schema": "public",                       +|                |                                        | 
-     "columns": [                              +|                |                                        | 
-         {                                     +|                |                                        | 
-             "name": "pk1",                    +|                |                                        | 
-             "type": "int4"                    +|                |                                        | 
-         },                                    +|                |                                        | 
-         {                                     +|                |                                        | 
-             "name": "body",                   +|                |                                        | 
-             "type": "text"                    +|                |                                        | 
-         }                                     +|                |                                        | 
-     ],                                        +|                |                                        | 
-     "old_record": {                           +|                |                                        | 
-         "pk1": 1                              +|                |                                        | 
-     },                                        +|                |                                        | 
-     "commit_timestamp": "2000-01-01T00:01:01Z"+|                |                                        | 
- }                                              |                |                                        | 
+                        rec                         | is_rls_enabled |            subscription_ids            | errors 
+----------------------------------------------------+----------------+----------------------------------------+--------
+ {                                                 +| t              | {f4539ebe-c779-5788-bbc1-2421ffaa8954} | {}
+     "type": "DELETE",                             +|                |                                        | 
+     "table": "notes",                             +|                |                                        | 
+     "schema": "public",                           +|                |                                        | 
+     "columns": [                                  +|                |                                        | 
+         {                                         +|                |                                        | 
+             "name": "pk1",                        +|                |                                        | 
+             "type": "int4"                        +|                |                                        | 
+         },                                        +|                |                                        | 
+         {                                         +|                |                                        | 
+             "name": "body",                       +|                |                                        | 
+             "type": "text"                        +|                |                                        | 
+         }                                         +|                |                                        | 
+     ],                                            +|                |                                        | 
+     "old_record": {                               +|                |                                        | 
+         "pk1": 1                                  +|                |                                        | 
+     },                                            +|                |                                        | 
+     "commit_timestamp": "2000-01-01T00:01:01.000Z"+|                |                                        | 
+ }                                                  |                |                                        | 
 (1 row)
 
 -- Option 3:
@@ -132,28 +132,28 @@ select
     errors
 from
    walrus;
-                      rec                       | is_rls_enabled |            subscription_ids            | errors 
-------------------------------------------------+----------------+----------------------------------------+--------
- {                                             +| f              | {f4539ebe-c779-5788-bbc1-2421ffaa8954} | {}
-     "type": "DELETE",                         +|                |                                        | 
-     "table": "notes",                         +|                |                                        | 
-     "schema": "public",                       +|                |                                        | 
-     "columns": [                              +|                |                                        | 
-         {                                     +|                |                                        | 
-             "name": "pk1",                    +|                |                                        | 
-             "type": "int4"                    +|                |                                        | 
-         },                                    +|                |                                        | 
-         {                                     +|                |                                        | 
-             "name": "body",                   +|                |                                        | 
-             "type": "text"                    +|                |                                        | 
-         }                                     +|                |                                        | 
-     ],                                        +|                |                                        | 
-     "old_record": {                           +|                |                                        | 
-         "pk1": 1,                             +|                |                                        | 
-         "body": "take out trash"              +|                |                                        | 
-     },                                        +|                |                                        | 
-     "commit_timestamp": "2000-01-01T00:01:01Z"+|                |                                        | 
- }                                              |                |                                        | 
+                        rec                         | is_rls_enabled |            subscription_ids            | errors 
+----------------------------------------------------+----------------+----------------------------------------+--------
+ {                                                 +| f              | {f4539ebe-c779-5788-bbc1-2421ffaa8954} | {}
+     "type": "DELETE",                             +|                |                                        | 
+     "table": "notes",                             +|                |                                        | 
+     "schema": "public",                           +|                |                                        | 
+     "columns": [                                  +|                |                                        | 
+         {                                         +|                |                                        | 
+             "name": "pk1",                        +|                |                                        | 
+             "type": "int4"                        +|                |                                        | 
+         },                                        +|                |                                        | 
+         {                                         +|                |                                        | 
+             "name": "body",                       +|                |                                        | 
+             "type": "text"                        +|                |                                        | 
+         }                                         +|                |                                        | 
+     ],                                            +|                |                                        | 
+     "old_record": {                               +|                |                                        | 
+         "pk1": 1,                                 +|                |                                        | 
+         "body": "take out trash"                  +|                |                                        | 
+     },                                            +|                |                                        | 
+     "commit_timestamp": "2000-01-01T00:01:01.000Z"+|                |                                        | 
+ }                                                  |                |                                        | 
 (1 row)
 
 -- Option 4:
@@ -178,27 +178,27 @@ select
     errors
 from
    walrus;
-                      rec                       | is_rls_enabled |            subscription_ids            | errors 
-------------------------------------------------+----------------+----------------------------------------+--------
- {                                             +| t              | {f4539ebe-c779-5788-bbc1-2421ffaa8954} | {}
-     "type": "DELETE",                         +|                |                                        | 
-     "table": "notes",                         +|                |                                        | 
-     "schema": "public",                       +|                |                                        | 
-     "columns": [                              +|                |                                        | 
-         {                                     +|                |                                        | 
-             "name": "pk1",                    +|                |                                        | 
-             "type": "int4"                    +|                |                                        | 
-         },                                    +|                |                                        | 
-         {                                     +|                |                                        | 
-             "name": "body",                   +|                |                                        | 
-             "type": "text"                    +|                |                                        | 
-         }                                     +|                |                                        | 
-     ],                                        +|                |                                        | 
-     "old_record": {                           +|                |                                        | 
-         "pk1": 1                              +|                |                                        | 
-     },                                        +|                |                                        | 
-     "commit_timestamp": "2000-01-01T00:01:01Z"+|                |                                        | 
- }                                              |                |                                        | 
+                        rec                         | is_rls_enabled |            subscription_ids            | errors 
+----------------------------------------------------+----------------+----------------------------------------+--------
+ {                                                 +| t              | {f4539ebe-c779-5788-bbc1-2421ffaa8954} | {}
+     "type": "DELETE",                             +|                |                                        | 
+     "table": "notes",                             +|                |                                        | 
+     "schema": "public",                           +|                |                                        | 
+     "columns": [                                  +|                |                                        | 
+         {                                         +|                |                                        | 
+             "name": "pk1",                        +|                |                                        | 
+             "type": "int4"                        +|                |                                        | 
+         },                                        +|                |                                        | 
+         {                                         +|                |                                        | 
+             "name": "body",                       +|                |                                        | 
+             "type": "text"                        +|                |                                        | 
+         }                                         +|                |                                        | 
+     ],                                            +|                |                                        | 
+     "old_record": {                               +|                |                                        | 
+         "pk1": 1                                  +|                |                                        | 
+     },                                            +|                |                                        | 
+     "commit_timestamp": "2000-01-01T00:01:01.000Z"+|                |                                        | 
+ }                                                  |                |                                        | 
 (1 row)
 
 select pg_drop_replication_slot('realtime');

@@ -88,7 +88,7 @@ begin;
              "type": "uuid"                               +|                |                                        | 
          }                                                +|                |                                        | 
      ],                                                   +|                |                                        | 
-     "commit_timestamp": "2000-01-01T00:01:01Z"           +|                |                                        | 
+     "commit_timestamp": "2000-01-01T00:01:01.000Z"       +|                |                                        | 
  }                                                         |                |                                        | 
 (1 row)
 

@@ -37,48 +37,48 @@ select
     errors
 from
    walrus;
-                      rec                       | is_rls_enabled |            subscription_ids            | errors 
-------------------------------------------------+----------------+----------------------------------------+--------
- {                                             +| t              | {f4539ebe-c779-5788-bbc1-2421ffaa8954} | {}
-     "type": "INSERT",                         +|                |                                        | 
-     "table": "notes",                         +|                |                                        | 
-     "record": {                               +|                |                                        | 
-         "id": 1,                              +|                |                                        | 
-         "primary_color": "RED"                +|                |                                        | 
-     },                                        +|                |                                        | 
-     "schema": "public",                       +|                |                                        | 
-     "columns": [                              +|                |                                        | 
-         {                                     +|                |                                        | 
-             "name": "id",                     +|                |                                        | 
-             "type": "int4"                    +|                |                                        | 
-         },                                    +|                |                                        | 
-         {                                     +|                |                                        | 
-             "name": "primary_color",          +|                |                                        | 
-             "type": "Color"                   +|                |                                        | 
-         }                                     +|                |                                        | 
-     ],                                        +|                |                                        | 
-     "commit_timestamp": "2000-01-01T00:01:01Z"+|                |                                        | 
- }                                              |                |                                        | 
- {                                             +| t              | {}                                     | {}
-     "type": "INSERT",                         +|                |                                        | 
-     "table": "notes",                         +|                |                                        | 
-     "record": {                               +|                |                                        | 
-         "id": 2,                              +|                |                                        | 
-         "primary_color": "GREEN"              +|                |                                        | 
-     },                                        +|                |                                        | 
-     "schema": "public",                       +|                |                                        | 
-     "columns": [                              +|                |                                        | 
-         {                                     +|                |                                        | 
-             "name": "id",                     +|                |                                        | 
-             "type": "int4"                    +|                |                                        | 
-         },                                    +|                |                                        | 
-         {                                     +|                |                                        | 
-             "name": "primary_color",          +|                |                                        | 
-             "type": "Color"                   +|                |                                        | 
-         }                                     +|                |                                        | 
-     ],                                        +|                |                                        | 
-     "commit_timestamp": "2000-01-01T00:01:01Z"+|                |                                        | 
- }                                              |                |                                        | 
+                        rec                         | is_rls_enabled |            subscription_ids            | errors 
+----------------------------------------------------+----------------+----------------------------------------+--------
+ {                                                 +| t              | {f4539ebe-c779-5788-bbc1-2421ffaa8954} | {}
+     "type": "INSERT",                             +|                |                                        | 
+     "table": "notes",                             +|                |                                        | 
+     "record": {                                   +|                |                                        | 
+         "id": 1,                                  +|                |                                        | 
+         "primary_color": "RED"                    +|                |                                        | 
+     },                                            +|                |                                        | 
+     "schema": "public",                           +|                |                                        | 
+     "columns": [                                  +|                |                                        | 
+         {                                         +|                |                                        | 
+             "name": "id",                         +|                |                                        | 
+             "type": "int4"                        +|                |                                        | 
+         },                                        +|                |                                        | 
+         {                                         +|                |                                        | 
+             "name": "primary_color",              +|                |                                        | 
+             "type": "Color"                       +|                |                                        | 
+         }                                         +|                |                                        | 
+     ],                                            +|                |                                        | 
+     "commit_timestamp": "2000-01-01T00:01:01.000Z"+|                |                                        | 
+ }                                                  |                |                                        | 
+ {                                                 +| t              | {}                                     | {}
+     "type": "INSERT",                             +|                |                                        | 
+     "table": "notes",                             +|                |                                        | 
+     "record": {                                   +|                |                                        | 
+         "id": 2,                                  +|                |                                        | 
+         "primary_color": "GREEN"                  +|                |                                        | 
+     },                                            +|                |                                        | 
+     "schema": "public",                           +|                |                                        | 
+     "columns": [                                  +|                |                                        | 
+         {                                         +|                |                                        | 
+             "name": "id",                         +|                |                                        | 
+             "type": "int4"                        +|                |                                        | 
+         },                                        +|                |                                        | 
+         {                                         +|                |                                        | 
+             "name": "primary_color",              +|                |                                        | 
+             "type": "Color"                       +|                |                                        | 
+         }                                         +|                |                                        | 
+     ],                                            +|                |                                        | 
+     "commit_timestamp": "2000-01-01T00:01:01.000Z"+|                |                                        | 
+ }                                                  |                |                                        | 
 (2 rows)
 
 drop table public.notes;
