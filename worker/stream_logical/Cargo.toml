@@ -5,9 +5,10 @@ edition = "2021"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-serde = { version = "1" }
+serde = "1"
 futures = "0.3"
 bytes = "1.0"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }
+serde_json = "1.0.91"

@@ -88,6 +88,7 @@ async fn main() {
     let mut state = PostgresState {
         lsn: 0.into(),
         tables: HashMap::new(),
+        types: HashMap::new(),
     };
 
     let mut last_keepalive = Instant::now();
@@ -102,7 +103,7 @@ async fn main() {
         match msg {
             Some(Ok(XLogData(xlog_data))) => {
                 let state_message = state.transform(&xlog_data.data());
-                if let Some(message) = state_message {
+                if let Ok(Some(message)) = state_message {
                     println!("got some state!, {:?}", message);
                 }
             }
