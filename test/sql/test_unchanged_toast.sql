@@ -19,7 +19,7 @@ select
     );
 
 insert into public.notes(id, body1, body2, body3)
-values (1, repeat('1', 24 *  1024), repeat('2', 24 *  1024), repeat('3', 24 *  1024));
+values (1, repeat('1', 3 *  1024), repeat('2', 3 *  1024), repeat('3', 3 *  1024));
 select clear_wal();
 
 update public.notes set body1 = 'new';
