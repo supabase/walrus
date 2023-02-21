@@ -61,7 +61,7 @@ from
      "old_record": {                               +|                |                                        | 
          "pk1": 1                                  +|                |                                        | 
      },                                            +|                |                                        | 
-     "commit_timestamp": "2000-01-01T00:01:01.000Z"+|                |                                        | 
+     "commit_timestamp": "2000-01-01T08:01:01.000Z"+|                |                                        | 
  }                                                  |                |                                        | 
 (1 row)
 
@@ -106,7 +106,7 @@ from
      "old_record": {                               +|                |                                        | 
          "pk1": 1                                  +|                |                                        | 
      },                                            +|                |                                        | 
-     "commit_timestamp": "2000-01-01T00:01:01.000Z"+|                |                                        | 
+     "commit_timestamp": "2000-01-01T08:01:01.000Z"+|                |                                        | 
  }                                                  |                |                                        | 
 (1 row)
 
@@ -152,7 +152,7 @@ from
          "pk1": 1,                                 +|                |                                        | 
          "body": "take out trash"                  +|                |                                        | 
      },                                            +|                |                                        | 
-     "commit_timestamp": "2000-01-01T00:01:01.000Z"+|                |                                        | 
+     "commit_timestamp": "2000-01-01T08:01:01.000Z"+|                |                                        | 
  }                                                  |                |                                        | 
 (1 row)
 
@@ -197,7 +197,7 @@ from
      "old_record": {                               +|                |                                        | 
          "pk1": 1                                  +|                |                                        | 
      },                                            +|                |                                        | 
-     "commit_timestamp": "2000-01-01T00:01:01.000Z"+|                |                                        | 
+     "commit_timestamp": "2000-01-01T08:01:01.000Z"+|                |                                        | 
  }                                                  |                |                                        | 
 (1 row)
 

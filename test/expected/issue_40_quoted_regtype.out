@@ -57,7 +57,7 @@ from
              "type": "Color"                       +|                |                                        | 
          }                                         +|                |                                        | 
      ],                                            +|                |                                        | 
-     "commit_timestamp": "2000-01-01T00:01:01.000Z"+|                |                                        | 
+     "commit_timestamp": "2000-01-01T08:01:01.000Z"+|                |                                        | 
  }                                                  |                |                                        | 
  {                                                 +| t              | {}                                     | {}
      "type": "INSERT",                             +|                |                                        | 
@@ -77,7 +77,7 @@ from
              "type": "Color"                       +|                |                                        | 
          }                                         +|                |                                        | 
      ],                                            +|                |                                        | 
-     "commit_timestamp": "2000-01-01T00:01:01.000Z"+|                |                                        | 
+     "commit_timestamp": "2000-01-01T08:01:01.000Z"+|                |                                        | 
  }                                                  |                |                                        | 
 (2 rows)
 
