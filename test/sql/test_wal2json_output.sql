@@ -12,7 +12,7 @@ begin;
 end;
 
 select
-    norm(x.data::jsonb)
+    jsonb_pretty(norm(x.data::jsonb))
 from
     pg_logical_slot_get_changes(
         'realtime', null, null,

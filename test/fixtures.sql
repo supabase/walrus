@@ -1,17 +1,18 @@
-create function norm(jsonb) returns text
+set timezone to 'UTC';
+alter database contrib_regression set timezone to 'UTC';
+
+create function norm(jsonb) returns jsonb
     language sql
     strict
 as $$
     -- Normalizes timestamps and pretty prints
     select
-        jsonb_pretty(
-            regexp_replace(
-                $1::text,
-                '\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}.\d+-\d+',
-                '2000-01-01 01:01:01.000000-07',
-                'g'
-            )::jsonb
-        );
+        regexp_replace(
+            $1::text,
+            '\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}.\d+-\d+',
+            '2000-01-01 01:01:01.000000-07',
+            'g'
+        )::jsonb
 $$;
 
 
@@ -26,8 +27,8 @@ $$;
 
 create view walrus as
     select
-        norm(x.data::jsonb) w2j_data,
-        norm(xyz.wal) rec,
+        jsonb_pretty(norm(x.data::jsonb)) w2j_data,
+        jsonb_pretty(xyz.wal) rec,
         xyz.is_rls_enabled,
         xyz.subscription_ids,
         xyz.errors
@@ -46,7 +47,7 @@ create view walrus as
                 *
             from
                 realtime.apply_rls(
-                    wal := norm(x.data::jsonb)::jsonb,
+                    wal := norm(x.data::jsonb),
                     max_record_bytes := 1048576
                 )
         ) xyz(wal, is_rls_enabled, subscription_ids, errors);
