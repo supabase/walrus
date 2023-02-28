@@ -68,7 +68,7 @@ from
              "type": "text"                        +|                |                                                                                                                  | 
          }                                         +|                |                                                                                                                  | 
      ],                                            +|                |                                                                                                                  | 
-     "commit_timestamp": "2000-01-01T00:01:01.000Z"+|                |                                                                                                                  | 
+     "commit_timestamp": "2000-01-01T08:01:01.000Z"+|                |                                                                                                                  | 
  }                                                  |                |                                                                                                                  | 
  {                                                 +| f              | {f4539ebe-c779-5788-bbc1-2421ffaa8954,5211e8ec-8c25-5c7f-9b03-6ff1eac0159e,11955172-4e1d-5836-925f-2bcb7a287b87} | {}
      "type": "DELETE",                             +|                |                                                                                                                  | 
@@ -87,7 +87,7 @@ from
      "old_record": {                               +|                |                                                                                                                  | 
          "id": 1                                   +|                |                                                                                                                  | 
      },                                            +|                |                                                                                                                  | 
-     "commit_timestamp": "2000-01-01T00:01:01.000Z"+|                |                                                                                                                  | 
+     "commit_timestamp": "2000-01-01T08:01:01.000Z"+|                |                                                                                                                  | 
  }                                                  |                |                                                                                                                  | 
 (2 rows)
 

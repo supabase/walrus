@@ -14,7 +14,7 @@ begin;
     delete from public.notes;
 end;
 select
-    norm(x.data::jsonb)
+    jsonb_pretty(norm(x.data::jsonb))
 from
     pg_logical_slot_get_changes(
         'realtime', null, null,
@@ -26,7 +26,7 @@ from
         'actions', 'insert,update,delete',
         'add-tables', 'public.notes'
     ) x;
-                       norm                       
+                   jsonb_pretty                   
 --------------------------------------------------
  {                                               +
      "pk": [                                     +

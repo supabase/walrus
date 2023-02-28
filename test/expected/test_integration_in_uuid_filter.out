@@ -63,7 +63,7 @@ from
              "type": "uuid"                                  +|                |                                        | 
          }                                                   +|                |                                        | 
      ],                                                      +|                |                                        | 
-     "commit_timestamp": "2000-01-01T00:01:01.000Z"          +|                |                                        | 
+     "commit_timestamp": "2000-01-01T08:01:01.000Z"          +|                |                                        | 
  }                                                            |                |                                        | 
  {                                                           +| f              | {3fa85983-bc94-5c16-8bc7-157b8152c678} | {}
      "type": "DELETE",                                       +|                |                                        | 
@@ -82,7 +82,7 @@ from
      "old_record": {                                         +|                |                                        | 
          "id": 1                                             +|                |                                        | 
      },                                                      +|                |                                        | 
-     "commit_timestamp": "2000-01-01T00:01:01.000Z"          +|                |                                        | 
+     "commit_timestamp": "2000-01-01T08:01:01.000Z"          +|                |                                        | 
  }                                                            |                |                                        | 
 (2 rows)
 
