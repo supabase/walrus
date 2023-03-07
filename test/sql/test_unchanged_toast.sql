@@ -3,10 +3,11 @@ select 1 from pg_create_logical_replication_slot('realtime', 'wal2json', false);
 create table public.notes(
     id int primary key,
     body1 text,
-    body2 text,
-    body3 text
+    body2 text
 );
 alter table public.notes replica identity full;
+
+alter table public.notes alter column body2 set storage external;
 
 insert into realtime.subscription(subscription_id, entity, claims)
 select
@@ -18,8 +19,8 @@ select
         'sub', seed_uuid(2)::text
     );
 
-insert into public.notes(id, body1, body2, body3)
-values (1, repeat('1', 3 *  1024), repeat('2', 3 *  1024), repeat('3', 3 *  1024));
+insert into public.notes(id, body1, body2)
+values (1, repeat('1', 1 *  1024), repeat('2', 1 *  1024));
 select clear_wal();
 
 update public.notes set body1 = 'new';
