@@ -275,7 +275,7 @@ with pub as (
             string_agg(
                 realtime.quote_wal2json(format('%I.%I', schemaname, tablename)::regclass),
                 ','
-            ) filter (where ppt.tablename is not null),
+            ) filter (where ppt.tablename is not null and ppt.tablename not like '% %'),
             ''
         ) w2j_add_tables
     from
