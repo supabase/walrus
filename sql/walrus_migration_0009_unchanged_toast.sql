@@ -201,7 +201,7 @@ begin
                                 full outer join unnest(old_columns) oc
                                     on (c).name = (oc).name
                             where
-                                (c).is_selectable
+                                coalesce((c).is_selectable, (oc).is_selectable)
                                 and ( not error_record_exceeds_max_size or (octet_length((c).value::text) <= 64))
                         )
                     )
