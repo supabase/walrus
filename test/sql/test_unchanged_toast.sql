@@ -7,7 +7,9 @@ create table public.notes(
 );
 alter table public.notes replica identity full;
 
+-- Disable compression to force values to be TOASTed
 alter table public.notes alter column body2 set storage external;
+alter table public.notes alter column body1 set storage external;
 
 insert into realtime.subscription(subscription_id, entity, claims)
 select
@@ -20,7 +22,7 @@ select
     );
 
 insert into public.notes(id, body1, body2)
-values (1, repeat('1', 1 *  1024), repeat('2', 1 *  1024));
+values (1, repeat('1', 2 *  1024), repeat('2', 2 *  1024));
 select clear_wal();
 
 update public.notes set body1 = 'new';
