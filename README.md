@@ -325,7 +325,7 @@ where
 
 ### max_record_bytes
 
-`max_record_bytes` (default 1MB): Controls the maximum size of a WAL record that will be emitted with complete `record` and `old_record` data. When the size of the wal2json record exceeds `max_record_bytes` the `record` and `old_record` objects are filtered to include only fields with a value size <= 64 bytes. The `errors` output array is set to contain the string `"Error 413: Payload Too Large"`.
+`max_record_bytes` (default 1 MiB): Controls the maximum size of a WAL record that will be emitted with complete `record` and `old_record` data. When the size of the wal2json record exceeds `max_record_bytes` the `record` and `old_record` objects are filtered to include only fields with a value size <= 64 bytes. The `errors` output array is set to contain the string `"Error 413: Payload Too Large"`.
 
 Ex:
 ```sql
