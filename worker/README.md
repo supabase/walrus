@@ -30,7 +30,7 @@ docker-compose up
 Run the `walrus` worker, piping its output to `realtime` transport
 ```sh
 cargo run --bin walrus -- \
-    cargo run -- --connection=postgresql://postgres:password@localhost:5501/postgres --publication=walrus_pub |
+    --connection=postgresql://postgres:password@localhost:5501/postgres --publication=walrus_pub |
 cargo run --bin realtime -- \
     --url=wss://sendwal.fly.dev/socket \
     --header=apikey=<apikey>
