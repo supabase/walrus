@@ -233,7 +233,7 @@ The stream can be polled with
 select
     xyz.wal,
     xyz.is_rls_enabled,
-    xyz.subscription_ids,
+    xyz.subcription_ids,
     xyz.errors
 from
     pg_logical_slot_get_changes(
@@ -251,13 +251,13 @@ from
         select
             x.wal,
             x.is_rls_enabled,
-            x.subscription_ids,
+            x.subcription_ids,
             x.errors
         from
             realtime.apply_rls(data::jsonb) x(wal, is_rls_enabled, subcription_ids, errors)
     ) xyz
 where
-    xyz.subscription_ids[1] is not null
+    xyz.subcription_ids[1] is not null
 ```
 
 Or, if the stream should be filtered according to a publication:
