@@ -7,7 +7,7 @@ create table public."User Notes"(
 insert into realtime.subscription(subscription_id, entity, claims)
 select
     seed_uuid(1),
-    'public.User Notes',
+    '"User Notes"'::regclass,
     jsonb_build_object(
         'role', 'authenticated',
         'email', 'example@example.com',
