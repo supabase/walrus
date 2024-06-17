@@ -5,17 +5,18 @@ select 1 from pg_create_logical_replication_slot('realtime', 'wal2json', false);
 (1 row)
 
 create role "has-hyphen" nologin noinherit;
-grant usage on schema public to "has-hyphen";
-alter default privileges in schema public grant all on tables to "has-hyphen";
-alter default privileges in schema public grant all on functions to "has-hyphen";
-alter default privileges in schema public grant all on sequences to "has-hyphen";
-create table public.notes(
+create schema private;
+grant usage on schema private to "has-hyphen";
+alter default privileges in schema private grant all on tables to "has-hyphen";
+alter default privileges in schema private grant all on functions to "has-hyphen";
+alter default privileges in schema private grant all on sequences to "has-hyphen";
+create table private.notes(
     id int primary key
 );
 insert into realtime.subscription(subscription_id, entity, claims)
 select
     seed_uuid(1),
-    'public.notes',
+    'private.notes',
     jsonb_build_object(
         'role', 'has-hyphen',
         'email', 'example@example.com',
@@ -27,7 +28,7 @@ select clear_wal();
  
 (1 row)
 
-insert into public.notes(id) values (1);
+insert into private.notes(id) values (1);
 select
     rec,
     is_rls_enabled,
@@ -43,7 +44,7 @@ from
      "record": {                                   +|                |                                        | 
          "id": 1                                   +|                |                                        | 
      },                                            +|                |                                        | 
-     "schema": "public",                           +|                |                                        | 
+     "schema": "private",                          +|                |                                        | 
      "columns": [                                  +|                |                                        | 
          {                                         +|                |                                        | 
              "name": "id",                         +|                |                                        | 
@@ -54,7 +55,8 @@ from
  }                                                  |                |                                        | 
 (1 row)
 
-drop table public.notes;
+drop table private.notes;
+drop schema private;
 select pg_drop_replication_slot('realtime');
  pg_drop_replication_slot 
 --------------------------

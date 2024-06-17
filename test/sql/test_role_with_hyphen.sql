@@ -1,21 +1,23 @@
 select 1 from pg_create_logical_replication_slot('realtime', 'wal2json', false);
 
+
 create role "has-hyphen" nologin noinherit;
-grant usage on schema public to "has-hyphen";
-alter default privileges in schema public grant all on tables to "has-hyphen";
-alter default privileges in schema public grant all on functions to "has-hyphen";
-alter default privileges in schema public grant all on sequences to "has-hyphen";
 
+create schema private;
 
+grant usage on schema private to "has-hyphen";
+alter default privileges in schema private grant all on tables to "has-hyphen";
+alter default privileges in schema private grant all on functions to "has-hyphen";
+alter default privileges in schema private grant all on sequences to "has-hyphen";
 
-create table public.notes(
+create table private.notes(
     id int primary key
 );
 
 insert into realtime.subscription(subscription_id, entity, claims)
 select
     seed_uuid(1),
-    'public.notes',
+    'private.notes',
     jsonb_build_object(
         'role', 'has-hyphen',
         'email', 'example@example.com',
@@ -23,7 +25,7 @@ select
     );
 
 select clear_wal();
-insert into public.notes(id) values (1);
+insert into private.notes(id) values (1);
 
 select
     rec,
@@ -34,6 +36,7 @@ from
    walrus;
 
 
-drop table public.notes;
+drop table private.notes;
+drop schema private;
 select pg_drop_replication_slot('realtime');
 truncate table realtime.subscription;
