@@ -14,6 +14,13 @@ create table private.notes(
     id int primary key
 );
 
+create policy rls_note_select
+on private.notes
+to "has-hyphen"
+using (true);
+
+alter table private.notes enable row level security;
+
 insert into realtime.subscription(subscription_id, entity, claims)
 select
     seed_uuid(1),

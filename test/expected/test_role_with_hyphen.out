@@ -13,6 +13,11 @@ alter default privileges in schema private grant all on sequences to "has-hyphen
 create table private.notes(
     id int primary key
 );
+create policy rls_note_select
+on private.notes
+to "has-hyphen"
+using (true);
+alter table private.notes enable row level security;
 insert into realtime.subscription(subscription_id, entity, claims)
 select
     seed_uuid(1),
@@ -38,7 +43,7 @@ from
    walrus;
                         rec                         | is_rls_enabled |            subscription_ids            | errors 
 ----------------------------------------------------+----------------+----------------------------------------+--------
- {                                                 +| f              | {f4539ebe-c779-5788-bbc1-2421ffaa8954} | {}
+ {                                                 +| t              | {f4539ebe-c779-5788-bbc1-2421ffaa8954} | {}
      "type": "INSERT",                             +|                |                                        | 
      "table": "notes",                             +|                |                                        | 
      "record": {                                   +|                |                                        | 
