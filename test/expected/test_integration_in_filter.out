@@ -8,6 +8,7 @@ create table public.notes(
     id int primary key,
     body text
 );
+alter table public.notes replica identity full;
 insert into realtime.subscription(subscription_id, entity, claims, filters)
 select
     seed_uuid(id),
@@ -70,7 +71,7 @@ from
      ],                                            +|                |                                        | 
      "commit_timestamp": "2000-01-01T08:01:01.000Z"+|                |                                        | 
  }                                                  |                |                                        | 
- {                                                 +| f              | {}                                     | {}
+ {                                                 +| f              | {f4539ebe-c779-5788-bbc1-2421ffaa8954} | {}
      "type": "DELETE",                             +|                |                                        | 
      "table": "notes",                             +|                |                                        | 
      "schema": "public",                           +|                |                                        | 
@@ -85,7 +86,8 @@ from
          }                                         +|                |                                        | 
      ],                                            +|                |                                        | 
      "old_record": {                               +|                |                                        | 
-         "id": 1                                   +|                |                                        | 
+         "id": 1,                                  +|                |                                        | 
+         "body": "bbb"                             +|                |                                        | 
      },                                            +|                |                                        | 
      "commit_timestamp": "2000-01-01T08:01:01.000Z"+|                |                                        | 
  }                                                  |                |                                        | 

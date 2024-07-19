@@ -5,6 +5,8 @@ create table public.notes(
     body text
 );
 
+alter table public.notes replica identity full;
+
 insert into realtime.subscription(subscription_id, entity, claims, filters)
 select
     seed_uuid(id),
