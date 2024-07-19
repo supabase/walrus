@@ -65,7 +65,7 @@ from
      ],                                                      +|                |                                        | 
      "commit_timestamp": "2000-01-01T08:01:01.000Z"          +|                |                                        | 
  }                                                            |                |                                        | 
- {                                                           +| f              | {3fa85983-bc94-5c16-8bc7-157b8152c678} | {}
+ {                                                           +| f              | {}                                     | {}
      "type": "DELETE",                                       +|                |                                        | 
      "table": "notes",                                       +|                |                                        | 
      "schema": "public",                                     +|                |                                        | 

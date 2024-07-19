@@ -48,47 +48,47 @@ select
     errors
 from
    walrus;
-                        rec                         | is_rls_enabled |                                                 subscription_ids                                                 | errors 
-----------------------------------------------------+----------------+------------------------------------------------------------------------------------------------------------------+--------
- {                                                 +| f              | {f4539ebe-c779-5788-bbc1-2421ffaa8954}                                                                           | {}
-     "type": "INSERT",                             +|                |                                                                                                                  | 
-     "table": "notes",                             +|                |                                                                                                                  | 
-     "record": {                                   +|                |                                                                                                                  | 
-         "id": 1,                                  +|                |                                                                                                                  | 
-         "body": "bbb"                             +|                |                                                                                                                  | 
-     },                                            +|                |                                                                                                                  | 
-     "schema": "public",                           +|                |                                                                                                                  | 
-     "columns": [                                  +|                |                                                                                                                  | 
-         {                                         +|                |                                                                                                                  | 
-             "name": "id",                         +|                |                                                                                                                  | 
-             "type": "int4"                        +|                |                                                                                                                  | 
-         },                                        +|                |                                                                                                                  | 
-         {                                         +|                |                                                                                                                  | 
-             "name": "body",                       +|                |                                                                                                                  | 
-             "type": "text"                        +|                |                                                                                                                  | 
-         }                                         +|                |                                                                                                                  | 
-     ],                                            +|                |                                                                                                                  | 
-     "commit_timestamp": "2000-01-01T08:01:01.000Z"+|                |                                                                                                                  | 
- }                                                  |                |                                                                                                                  | 
- {                                                 +| f              | {f4539ebe-c779-5788-bbc1-2421ffaa8954,5211e8ec-8c25-5c7f-9b03-6ff1eac0159e,11955172-4e1d-5836-925f-2bcb7a287b87} | {}
-     "type": "DELETE",                             +|                |                                                                                                                  | 
-     "table": "notes",                             +|                |                                                                                                                  | 
-     "schema": "public",                           +|                |                                                                                                                  | 
-     "columns": [                                  +|                |                                                                                                                  | 
-         {                                         +|                |                                                                                                                  | 
-             "name": "id",                         +|                |                                                                                                                  | 
-             "type": "int4"                        +|                |                                                                                                                  | 
-         },                                        +|                |                                                                                                                  | 
-         {                                         +|                |                                                                                                                  | 
-             "name": "body",                       +|                |                                                                                                                  | 
-             "type": "text"                        +|                |                                                                                                                  | 
-         }                                         +|                |                                                                                                                  | 
-     ],                                            +|                |                                                                                                                  | 
-     "old_record": {                               +|                |                                                                                                                  | 
-         "id": 1                                   +|                |                                                                                                                  | 
-     },                                            +|                |                                                                                                                  | 
-     "commit_timestamp": "2000-01-01T08:01:01.000Z"+|                |                                                                                                                  | 
- }                                                  |                |                                                                                                                  | 
+                        rec                         | is_rls_enabled |            subscription_ids            | errors 
+----------------------------------------------------+----------------+----------------------------------------+--------
+ {                                                 +| f              | {f4539ebe-c779-5788-bbc1-2421ffaa8954} | {}
+     "type": "INSERT",                             +|                |                                        | 
+     "table": "notes",                             +|                |                                        | 
+     "record": {                                   +|                |                                        | 
+         "id": 1,                                  +|                |                                        | 
+         "body": "bbb"                             +|                |                                        | 
+     },                                            +|                |                                        | 
+     "schema": "public",                           +|                |                                        | 
+     "columns": [                                  +|                |                                        | 
+         {                                         +|                |                                        | 
+             "name": "id",                         +|                |                                        | 
+             "type": "int4"                        +|                |                                        | 
+         },                                        +|                |                                        | 
+         {                                         +|                |                                        | 
+             "name": "body",                       +|                |                                        | 
+             "type": "text"                        +|                |                                        | 
+         }                                         +|                |                                        | 
+     ],                                            +|                |                                        | 
+     "commit_timestamp": "2000-01-01T08:01:01.000Z"+|                |                                        | 
+ }                                                  |                |                                        | 
+ {                                                 +| f              | {}                                     | {}
+     "type": "DELETE",                             +|                |                                        | 
+     "table": "notes",                             +|                |                                        | 
+     "schema": "public",                           +|                |                                        | 
+     "columns": [                                  +|                |                                        | 
+         {                                         +|                |                                        | 
+             "name": "id",                         +|                |                                        | 
+             "type": "int4"                        +|                |                                        | 
+         },                                        +|                |                                        | 
+         {                                         +|                |                                        | 
+             "name": "body",                       +|                |                                        | 
+             "type": "text"                        +|                |                                        | 
+         }                                         +|                |                                        | 
+     ],                                            +|                |                                        | 
+     "old_record": {                               +|                |                                        | 
+         "id": 1                                   +|                |                                        | 
+     },                                            +|                |                                        | 
+     "commit_timestamp": "2000-01-01T08:01:01.000Z"+|                |                                        | 
+ }                                                  |                |                                        | 
 (2 rows)
 
 -- Confirm that filtering on `in` more than 100 entries throws an error
