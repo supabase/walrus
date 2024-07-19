@@ -30,6 +30,11 @@ jobs:
           # install wal2json
           cd wal2json
           apt-get update && apt-get install build-essential llvm-11 -y
+          apt install -y wget lsb-release
+          wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add -
+          apt-get update
+          apt install libpq5=16.3-1.pgdg20.04+1 libpq-dev postgresql-server-dev-15 -y
+
           make
           make install
           # run tests
