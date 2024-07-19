@@ -12,7 +12,7 @@ jobs:
 
     runs-on: ubuntu-latest
     container:
-      image: supabase/postgres:14.1.0.106
+      image: supabase/postgres:15.1.1.79
       options: --tmpfs=/pgtmpfs -e PGDATA=/pgtmpfs
 
     steps:
@@ -29,7 +29,7 @@ jobs:
         run: |
           # install wal2json
           cd wal2json
-          apt-get update && apt-get install build-essential llvm-11 postgresql-server-dev-14 -y
+          apt-get update && apt-get install build-essential llvm-11 postgresql-server-dev-15 -y
           make
           make install
           # run tests
