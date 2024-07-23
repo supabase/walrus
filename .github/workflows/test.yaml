@@ -41,7 +41,7 @@ jobs:
           # run tests
           cd ..
           chown -R postgres /__w/walrus/walrus
-          su postgres -c 'bin/installcheck'
+          su postgres -c 'export PATH=$PATH:/usr/lib/postgresql/15/bin/ ; bin/installcheck'
 
       - uses: actions/upload-artifact@v3
         if: always()
