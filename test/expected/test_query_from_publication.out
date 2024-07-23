@@ -48,10 +48,10 @@ select clear_wal();
 
 insert into public.notes(id) values (1);
 insert into public.not_in_pub(id) values (1);
-select * from pg_publication_tables;
-      pubname      | schemaname | tablename 
--------------------+------------+-----------
- supabase_realtime | public     | notes
+select pubname, schemaname, tablename, attnames from pg_publication_tables;
+      pubname      | schemaname | tablename |   attnames   
+-------------------+------------+-----------+--------------
+ supabase_realtime | public     | notes     | {id,user_id}
 (1 row)
 
 select
