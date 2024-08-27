@@ -8,6 +8,7 @@ create table public.notes(
     id int primary key,
     identifier uuid
 );
+alter table public.notes replica identity full;
 insert into realtime.subscription(subscription_id, entity, claims, filters)
 select
     seed_uuid(5),
@@ -80,7 +81,8 @@ from
          }                                                   +|                |                                        | 
      ],                                                      +|                |                                        | 
      "old_record": {                                         +|                |                                        | 
-         "id": 1                                             +|                |                                        | 
+         "id": 1,                                            +|                |                                        | 
+         "identifier": "ace23052-568e-4951-acc8-fd510ec667f9"+|                |                                        | 
      },                                                      +|                |                                        | 
      "commit_timestamp": "2000-01-01T08:01:01.000Z"          +|                |                                        | 
  }                                                            |                |                                        | 

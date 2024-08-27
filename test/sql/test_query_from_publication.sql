@@ -49,7 +49,7 @@ select clear_wal();
 insert into public.notes(id) values (1);
 insert into public.not_in_pub(id) values (1);
 
-select * from pg_publication_tables;
+select pubname, schemaname, tablename, attnames from pg_publication_tables;
 
 
 select
