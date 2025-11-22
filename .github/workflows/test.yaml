@@ -21,12 +21,12 @@ jobs:
       - name: Run Test
         run: |
           # apt-get update && apt-get install postgresql-17-wal2json
-          # chown -R postgres /__w/walrus/walrus
+          chown -R postgres /__w/walrus/walrus
           su postgres -c 'export PATH=$PATH:/usr/lib/postgresql/17/bin/ ; bin/installcheck'
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: regression.out-${{ matrix.runs-on }}
-          path: regression-${{ matrix.runs-on }}.out
+          name: regression.out
+          path: regression.out
           retention-days: 7
