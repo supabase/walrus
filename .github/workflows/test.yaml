@@ -12,36 +12,19 @@ jobs:
 
     runs-on: ubuntu-24.04
     container:
-      image: supabase/postgres:15.1.1.79
+      image: supabase/postgres:17.6.1.054
       options: --tmpfs=/pgtmpfs -e PGDATA=/pgtmpfs
 
     steps:
       - uses: actions/checkout@v3
 
-      - name: Checkout wal2json
-        uses: actions/checkout@v3
-        with:
-          repository: eulerto/wal2json
-          ref: master
-          path: ./wal2json
-
       - name: Run Test
         run: |
           # install wal2json
           cd wal2json
-          apt-get update && apt-get install build-essential llvm-11 -y
-          apt install -y wget lsb-release
-          sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt noble-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
-          wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add -
-          apt-get update
-          apt install libpq5=16.3-1.pgdg20.04+1 libpq-dev postgresql-server-dev-15 -y --allow-downgrades
-
-          make
-          make install
-          # run tests
-          cd ..
+          apt-get update && apt-get install postgresql-17-wal2json
           chown -R postgres /__w/walrus/walrus
-          su postgres -c 'export PATH=$PATH:/usr/lib/postgresql/15/bin/ ; bin/installcheck'
+          su postgres -c 'export PATH=$PATH:/usr/lib/postgresql/17/bin/ ; bin/installcheck'
 
       - uses: actions/upload-artifact@v4
         if: always()
