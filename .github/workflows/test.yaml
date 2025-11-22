@@ -10,7 +10,7 @@ jobs:
   autotests:
     name: Run tests
 
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     container:
       image: supabase/postgres:17.6.1.054
       options: --tmpfs=/pgtmpfs -e PGDATA=/pgtmpfs
