@@ -339,30 +339,9 @@ The project is SQL only and can be installed by executing the contents of `sql/w
 
 ## Tests
 
-Requires
-
-- Postgres 13+
-- wal2json >= 53b548a29ebd6119323b6eb2f6013d7c5fe807ec
-
-On a Mac:
-
-Install postgres
-```sh
-brew install postgres
-```
-
-Install wal2json
-```sh
-git clone https://github.com/eulerto/wal2json.git
-cd wal2json
-git reset --hard 53b548a
-make
-make install
-```
-
 Run the tests, from the repo root.
 ```sh
-./bin/installcheck
+./run-test.sh
 ```
 
 ## RFC Process
