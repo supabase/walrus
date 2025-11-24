@@ -17,6 +17,7 @@ select
     'UPDATE';
 
 insert into public.notes(id, body) values (1, 'take out trash');
+
 update public.notes set id=2;
 
 select
