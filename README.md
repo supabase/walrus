@@ -31,8 +31,8 @@ create table realtime.subscription (
     claims jsonb not null,
     claims_role regrole not null generated always as (realtime.to_regrole(claims ->> 'role')) stored,
     created_at timestamp not null default timezone('utc', now()),
-
-    unique (subscription_id, entity, filters)
+    action_filter text NULL DEFAULT '*'::text CHECK (action_filter IN ('*', 'INSERT', 'UPDATE', 'DELETE'))
+    unique (subscription_id, entity, filters, action_filter)
 );
 ```
 where `realtime.user_defined_filter` is
@@ -54,6 +54,12 @@ For example, to subscribe to a table named `public.notes` where the `id` is `6` 
 ```sql
 insert into realtime.subscription(subscription_id, entity, filters, claims)
 values ('832bd278-dac7-4bef-96be-e21c8a0023c4', 'public.notes', array[('id', 'eq', '6')], '{"role", "authenticated"}');
+```
+
+To subscribe to `INSERT`s only on a table named `public.notes` where the `id` is `6` as the `authenticated` role:
+```sql
+insert into realtime.subscription(subscription_id, entity, filters, claims, action_filter)
+values ('832bd278-dac7-4bef-96be-e21c8a0023c4', 'public.notes', array[('id', 'eq', '6')], '{"role", "authenticated"}', 'INSERT');
 ```
 
 
