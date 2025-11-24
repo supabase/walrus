@@ -20,7 +20,6 @@ jobs:
 
       - name: Run Test
         run: |
-          # apt-get update && apt-get install postgresql-17-wal2json
           chown -R postgres /__w/walrus/walrus
           su postgres -c 'export PATH=$PATH:/usr/lib/postgresql/17/bin/ ; bin/installcheck'
 
