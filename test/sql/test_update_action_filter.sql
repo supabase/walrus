@@ -16,9 +16,12 @@ select
     ),
     'UPDATE';
 
+-- INSERT, UPDATE and DELETE but only UPDATE will be recorded
 insert into public.notes(id, body) values (1, 'take out trash');
 
 update public.notes set id=2;
+
+delete from public.notes;
 
 select
     rec,
