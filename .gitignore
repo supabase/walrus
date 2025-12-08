@@ -6,3 +6,6 @@ regression.*
 __pycache__/
 *.egg-info/
 *.swp
+target/
+Cargo.lock
+.DS_Store
