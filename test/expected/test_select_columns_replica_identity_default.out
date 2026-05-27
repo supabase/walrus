@@ -1,3 +1,8 @@
+/*
+Tests that replica identity DEFAULT combined with selected_columns is graceful:
+- WAL identity only contains PK columns (not full row), so old_record has only the PK
+- selected_columns requesting non-identity columns behaves gracefully on UPDATE and DELETE
+*/
 select 1 from pg_create_logical_replication_slot('realtime', 'wal2json', false);
  ?column? 
 ----------
@@ -6,42 +11,29 @@ select 1 from pg_create_logical_replication_slot('realtime', 'wal2json', false);
 
 create table public.notes(
     id int primary key,
-    body text
+    body text,
+    extra text
 );
-alter table public.notes replica identity full;
-insert into realtime.subscription(subscription_id, entity, claims, filters)
+-- No replica identity full: uses DEFAULT (identity = PK only)
+insert into realtime.subscription(subscription_id, entity, claims, selected_columns)
 select
-    seed_uuid(id),
+    seed_uuid(1),
     'public.notes',
     jsonb_build_object(
         'role', 'authenticated',
         'email', 'example@example.com',
-        'sub', seed_uuid(id)::text
+        'sub', seed_uuid(1)::text
     ),
-    array[(column_name, op, value)::realtime.user_defined_filter]
-from
-    (
-        values
-            (1 , 'body', 'in', array['aaa', 'bbb', 'ccc']::text),
-            (2 , 'body', 'in', array['aaa', 'ccc']::text),
-            (3 , 'body', 'in', array[]::text[]::text)
-    ) f(id, column_name, op, value);
+    array['body'];
+insert into public.notes(id, body, extra) values (1, 'old body', 'extra data');
+-- UPDATE: old_record should only have the PK (body not in WAL identity)
 select clear_wal();
  clear_wal 
 -----------
  
 (1 row)
 
-insert into public.notes(id, body) values (1, 'bbb');
-delete from public.notes;
-select subscription_id, filters from realtime.subscription;
-           subscription_id            |             filters             
---------------------------------------+---------------------------------
- f4539ebe-c779-5788-bbc1-2421ffaa8954 | {"(body,in,\"{aaa,bbb,ccc}\")"}
- 5211e8ec-8c25-5c7f-9b03-6ff1eac0159e | {"(body,in,\"{aaa,ccc}\")"}
- 11955172-4e1d-5836-925f-2bcb7a287b87 | {"(body,in,{})"}
-(3 rows)
-
+update public.notes set body = 'new body', extra = 'new extra' where id = 1;
 select
     rec,
     is_rls_enabled,
@@ -52,11 +44,11 @@ from
                         rec                         | is_rls_enabled |            subscription_ids            | errors 
 ----------------------------------------------------+----------------+----------------------------------------+--------
  {                                                 +| f              | {f4539ebe-c779-5788-bbc1-2421ffaa8954} | {}
-     "type": "INSERT",                             +|                |                                        | 
+     "type": "UPDATE",                             +|                |                                        | 
      "table": "notes",                             +|                |                                        | 
      "record": {                                   +|                |                                        | 
          "id": 1,                                  +|                |                                        | 
-         "body": "bbb"                             +|                |                                        | 
+         "body": "new body"                        +|                |                                        | 
      },                                            +|                |                                        | 
      "schema": "public",                           +|                |                                        | 
      "columns": [                                  +|                |                                        | 
@@ -69,8 +61,30 @@ from
              "type": "text"                        +|                |                                        | 
          }                                         +|                |                                        | 
      ],                                            +|                |                                        | 
+     "old_record": {                               +|                |                                        | 
+         "id": 1                                   +|                |                                        | 
+     },                                            +|                |                                        | 
      "commit_timestamp": "2000-01-01T08:01:01.000Z"+|                |                                        | 
  }                                                  |                |                                        | 
+(1 row)
+
+-- DELETE: old_record should only have the PK (body not in WAL identity)
+select clear_wal();
+ clear_wal 
+-----------
+ 
+(1 row)
+
+delete from public.notes where id = 1;
+select
+    rec,
+    is_rls_enabled,
+    subscription_ids,
+    errors
+from
+   walrus;
+                        rec                         | is_rls_enabled |            subscription_ids            | errors 
+----------------------------------------------------+----------------+----------------------------------------+--------
  {                                                 +| f              | {f4539ebe-c779-5788-bbc1-2421ffaa8954} | {}
      "type": "DELETE",                             +|                |                                        | 
      "table": "notes",                             +|                |                                        | 
@@ -86,26 +100,12 @@ from
          }                                         +|                |                                        | 
      ],                                            +|                |                                        | 
      "old_record": {                               +|                |                                        | 
-         "id": 1,                                  +|                |                                        | 
-         "body": "bbb"                             +|                |                                        | 
+         "id": 1                                   +|                |                                        | 
      },                                            +|                |                                        | 
      "commit_timestamp": "2000-01-01T08:01:01.000Z"+|                |                                        | 
  }                                                  |                |                                        | 
-(2 rows)
+(1 row)
 
--- Confirm that filtering on `in` more than 100 entries throws an error
-insert into realtime.subscription(subscription_id, entity, claims, filters)
-select
-    seed_uuid(6),
-    'public.notes',
-    jsonb_build_object(
-        'role', 'authenticated',
-        'email', 'example@example.com',
-        'sub', seed_uuid(6)::text
-    ),
-    array[('body', 'in', array[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1])::realtime.user_defined_filter];
-ERROR:  too many values for `in` filter. Maximum 100
-CONTEXT:  PL/pgSQL function realtime.subscription_check_filters() line 50 at RAISE
 drop table public.notes;
 select pg_drop_replication_slot('realtime');
  pg_drop_replication_slot 
