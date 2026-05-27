@@ -139,8 +139,12 @@ declare
     -- Primary jsonb output for record
     output jsonb;
 
-    -- Loop record for iterating unique (role, selected_columns) pairs
-    role_cols_record record;
+    -- Loop record for iterating unique roles (outer loop)
+    role_record record;
+    -- Loop record for iterating unique selected_columns within a role (inner loop)
+    cols_record record;
+    -- Subscription ids visible at the role level (before fanning out by selected_columns)
+    visible_role_sub_ids uuid[] = '{}';
 
 begin
     perform set_config('role', null, true);
@@ -189,18 +193,14 @@ begin
             left join jsonb_array_elements(wal -> 'pk') pks
                 on (x ->> 'name') = (pks ->> 'name');
 
-    for role_cols_record in
-        select *
-        from (
-            select distinct claims_role, selected_columns
-            from unnest(subscriptions)
-        ) t
-        order by t.claims_role::text, coalesce(array_to_string(t.selected_columns, ','), '')
+    for role_record in
+        select claims_role
+        from (select distinct claims_role from unnest(subscriptions)) t
+        order by claims_role::text
     loop
-        working_role := role_cols_record.claims_role;
-        working_selected_columns := role_cols_record.selected_columns;
+        working_role := role_record.claims_role;
 
-        -- Update `is_selectable` for columns and old_columns
+        -- Update `is_selectable` for columns and old_columns (once per role)
         columns =
             array_agg(
                 (
@@ -230,123 +230,48 @@ begin
                     unnest(old_columns) c;
 
         if action <> 'DELETE' and count(1) = 0 from unnest(columns) c where c.is_pkey then
-            return next (
-                jsonb_build_object(
-                    'schema', wal ->> 'schema',
-                    'table', wal ->> 'table',
-                    'type', action
-                ),
-                is_rls_enabled,
-                -- subscriptions filtered by entity, role, and selected_columns
-                (select array_agg(s.subscription_id) from unnest(subscriptions) as s where claims_role = working_role and (s.selected_columns is not distinct from working_selected_columns)),
-                array['Error 400: Bad Request, no primary key']
-            )::realtime.wal_rls;
+            -- Fan out 400 error per distinct selected_columns for this role
+            for cols_record in
+                select selected_columns
+                from (select distinct selected_columns from unnest(subscriptions) s where s.claims_role = working_role) t
+                order by coalesce(array_to_string(selected_columns, ','), '')
+            loop
+                working_selected_columns := cols_record.selected_columns;
+                return next (
+                    jsonb_build_object(
+                        'schema', wal ->> 'schema',
+                        'table', wal ->> 'table',
+                        'type', action
+                    ),
+                    is_rls_enabled,
+                    (select array_agg(s.subscription_id) from unnest(subscriptions) as s where s.claims_role = working_role and (s.selected_columns is not distinct from working_selected_columns)),
+                    array['Error 400: Bad Request, no primary key']
+                )::realtime.wal_rls;
+            end loop;
 
         -- The claims role does not have SELECT permission to the primary key of entity
         elsif action <> 'DELETE' and sum(c.is_selectable::int) <> count(1) from unnest(columns) c where c.is_pkey then
-            return next (
-                jsonb_build_object(
-                    'schema', wal ->> 'schema',
-                    'table', wal ->> 'table',
-                    'type', action
-                ),
-                is_rls_enabled,
-                (select array_agg(s.subscription_id) from unnest(subscriptions) as s where claims_role = working_role and (s.selected_columns is not distinct from working_selected_columns)),
-                array['Error 401: Unauthorized']
-            )::realtime.wal_rls;
+            -- Fan out 401 error per distinct selected_columns for this role
+            for cols_record in
+                select selected_columns
+                from (select distinct selected_columns from unnest(subscriptions) s where s.claims_role = working_role) t
+                order by coalesce(array_to_string(selected_columns, ','), '')
+            loop
+                working_selected_columns := cols_record.selected_columns;
+                return next (
+                    jsonb_build_object(
+                        'schema', wal ->> 'schema',
+                        'table', wal ->> 'table',
+                        'type', action
+                    ),
+                    is_rls_enabled,
+                    (select array_agg(s.subscription_id) from unnest(subscriptions) as s where s.claims_role = working_role and (s.selected_columns is not distinct from working_selected_columns)),
+                    array['Error 401: Unauthorized']
+                )::realtime.wal_rls;
+            end loop;
 
         else
-            output = jsonb_build_object(
-                'schema', wal ->> 'schema',
-                'table', wal ->> 'table',
-                'type', action,
-                'commit_timestamp', to_char(
-                    ((wal ->> 'timestamp')::timestamptz at time zone 'utc'),
-                    'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
-                ),
-                'columns', (
-                    select
-                        jsonb_agg(
-                            jsonb_build_object(
-                                'name', pa.attname,
-                                'type', pt.typname
-                            )
-                            order by pa.attnum asc
-                        )
-                    from
-                        pg_attribute pa
-                        join pg_type pt
-                            on pa.atttypid = pt.oid
-                        left join (
-                            select unnest(conkey) as pkey_attnum
-                            from pg_constraint
-                            where conrelid = entity_ and contype = 'p'
-                        ) pk on pk.pkey_attnum = pa.attnum
-                    where
-                        attrelid = entity_
-                        and attnum > 0
-                        and pg_catalog.has_column_privilege(working_role, entity_, pa.attname, 'SELECT')
-                        and (working_selected_columns is null or pa.attname = any(working_selected_columns) or pk.pkey_attnum is not null)
-                )
-            )
-            -- Add "record" key for insert and update
-            || case
-                when action in ('INSERT', 'UPDATE') then
-                    jsonb_build_object(
-                        'record',
-                        (
-                            select
-                                jsonb_object_agg(
-                                    -- if unchanged toast, get column name and value from old record
-                                    coalesce((c).name, (oc).name),
-                                    case
-                                        when (c).name is null then (oc).value
-                                        else (c).value
-                                    end
-                                )
-                            from
-                                unnest(columns) c
-                                full outer join unnest(old_columns) oc
-                                    on (c).name = (oc).name
-                            where
-                                coalesce((c).is_selectable, (oc).is_selectable)
-                                and (working_selected_columns is null or coalesce((c).name, (oc).name) = any(working_selected_columns) or coalesce((c).is_pkey, (oc).is_pkey))
-                                and ( not error_record_exceeds_max_size or (octet_length((c).value::text) <= 64))
-                        )
-                    )
-                else '{}'::jsonb
-            end
-            -- Add "old_record" key for update and delete
-            || case
-                when action = 'UPDATE' then
-                    jsonb_build_object(
-                            'old_record',
-                            (
-                                select jsonb_object_agg((c).name, (c).value)
-                                from unnest(old_columns) c
-                                where
-                                    (c).is_selectable
-                                    and (working_selected_columns is null or (c).name = any(working_selected_columns) or (c).is_pkey)
-                                    and ( not error_record_exceeds_max_size or (octet_length((c).value::text) <= 64))
-                            )
-                        )
-                when action = 'DELETE' then
-                    jsonb_build_object(
-                        'old_record',
-                        (
-                            select jsonb_object_agg((c).name, (c).value)
-                            from unnest(old_columns) c
-                            where
-                                (c).is_selectable
-                                and (working_selected_columns is null or (c).name = any(working_selected_columns) or (c).is_pkey)
-                                and ( not error_record_exceeds_max_size or (octet_length((c).value::text) <= 64))
-                                and ( not is_rls_enabled or (c).is_pkey ) -- if RLS enabled, we can't secure deletes so filter to pkey
-                        )
-                    )
-                else '{}'::jsonb
-            end;
-
-            -- Create the prepared statement
+            -- Create the prepared statement (once per role)
             if is_rls_enabled and action <> 'DELETE' then
                 if (select 1 from pg_prepared_statements where name = 'walrus_rls_stmt' limit 1) > 0 then
                     deallocate walrus_rls_stmt;
@@ -354,7 +279,8 @@ begin
                 execute realtime.build_prepared_statement_sql('walrus_rls_stmt', entity_, columns);
             end if;
 
-            visible_to_subscription_ids = '{}';
+            -- Collect all visible subscription IDs for this role (filter check + RLS check)
+            visible_role_sub_ids = '{}';
 
             for subscription_id, claims in (
                     select
@@ -365,7 +291,6 @@ begin
                     where
                         subs.entity = entity_
                         and subs.claims_role = working_role
-                        and (subs.selected_columns is not distinct from working_selected_columns)
                         and (
                             realtime.is_visible_through_filters(columns, subs.filters)
                             or (
@@ -376,7 +301,7 @@ begin
             ) loop
 
                 if not is_rls_enabled or action = 'DELETE' then
-                    visible_to_subscription_ids = visible_to_subscription_ids || subscription_id;
+                    visible_role_sub_ids = visible_role_sub_ids || subscription_id;
                 else
                     -- Check if RLS allows the role to see the record
                     perform
@@ -388,22 +313,133 @@ begin
                     execute 'execute walrus_rls_stmt' into subscription_has_access;
 
                     if subscription_has_access then
-                        visible_to_subscription_ids = visible_to_subscription_ids || subscription_id;
+                        visible_role_sub_ids = visible_role_sub_ids || subscription_id;
                     end if;
                 end if;
             end loop;
 
             perform set_config('role', null, true);
 
-            return next (
-                output,
-                is_rls_enabled,
-                visible_to_subscription_ids,
-                case
-                    when error_record_exceeds_max_size then array['Error 413: Payload Too Large']
-                    else '{}'
+            -- Inner loop: per distinct selected_columns for this role
+            for cols_record in
+                select selected_columns
+                from (select distinct selected_columns from unnest(subscriptions) s where s.claims_role = working_role) t
+                order by coalesce(array_to_string(selected_columns, ','), '')
+            loop
+                working_selected_columns := cols_record.selected_columns;
+
+                output = jsonb_build_object(
+                    'schema', wal ->> 'schema',
+                    'table', wal ->> 'table',
+                    'type', action,
+                    'commit_timestamp', to_char(
+                        ((wal ->> 'timestamp')::timestamptz at time zone 'utc'),
+                        'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+                    ),
+                    'columns', (
+                        select
+                            jsonb_agg(
+                                jsonb_build_object(
+                                    'name', pa.attname,
+                                    'type', pt.typname
+                                )
+                                order by pa.attnum asc
+                            )
+                        from
+                            pg_attribute pa
+                            join pg_type pt
+                                on pa.atttypid = pt.oid
+                            left join (
+                                select unnest(conkey) as pkey_attnum
+                                from pg_constraint
+                                where conrelid = entity_ and contype = 'p'
+                            ) pk on pk.pkey_attnum = pa.attnum
+                        where
+                            attrelid = entity_
+                            and attnum > 0
+                            and pg_catalog.has_column_privilege(working_role, entity_, pa.attname, 'SELECT')
+                            and (working_selected_columns is null or pa.attname = any(working_selected_columns) or pk.pkey_attnum is not null)
+                    )
+                )
+                -- Add "record" key for insert and update
+                || case
+                    when action in ('INSERT', 'UPDATE') then
+                        jsonb_build_object(
+                            'record',
+                            (
+                                select
+                                    jsonb_object_agg(
+                                        -- if unchanged toast, get column name and value from old record
+                                        coalesce((c).name, (oc).name),
+                                        case
+                                            when (c).name is null then (oc).value
+                                            else (c).value
+                                        end
+                                    )
+                                from
+                                    unnest(columns) c
+                                    full outer join unnest(old_columns) oc
+                                        on (c).name = (oc).name
+                                where
+                                    coalesce((c).is_selectable, (oc).is_selectable)
+                                    and (working_selected_columns is null or coalesce((c).name, (oc).name) = any(working_selected_columns) or coalesce((c).is_pkey, (oc).is_pkey))
+                                    and ( not error_record_exceeds_max_size or (octet_length((c).value::text) <= 64))
+                            )
+                        )
+                    else '{}'::jsonb
                 end
-            )::realtime.wal_rls;
+                -- Add "old_record" key for update and delete
+                || case
+                    when action = 'UPDATE' then
+                        jsonb_build_object(
+                                'old_record',
+                                (
+                                    select jsonb_object_agg((c).name, (c).value)
+                                    from unnest(old_columns) c
+                                    where
+                                        (c).is_selectable
+                                        and (working_selected_columns is null or (c).name = any(working_selected_columns) or (c).is_pkey)
+                                        and ( not error_record_exceeds_max_size or (octet_length((c).value::text) <= 64))
+                                )
+                            )
+                    when action = 'DELETE' then
+                        jsonb_build_object(
+                            'old_record',
+                            (
+                                select jsonb_object_agg((c).name, (c).value)
+                                from unnest(old_columns) c
+                                where
+                                    (c).is_selectable
+                                    and (working_selected_columns is null or (c).name = any(working_selected_columns) or (c).is_pkey)
+                                    and ( not error_record_exceeds_max_size or (octet_length((c).value::text) <= 64))
+                                    and ( not is_rls_enabled or (c).is_pkey ) -- if RLS enabled, we can't secure deletes so filter to pkey
+                            )
+                        )
+                    else '{}'::jsonb
+                end;
+
+                -- Filter visible_role_sub_ids to those matching the current selected_columns group
+                visible_to_subscription_ids = coalesce(
+                    (
+                        select array_agg(s.subscription_id)
+                        from unnest(subscriptions) s
+                        where s.claims_role = working_role
+                          and (s.selected_columns is not distinct from working_selected_columns)
+                          and s.subscription_id = any(visible_role_sub_ids)
+                    ),
+                    '{}'::uuid[]
+                );
+
+                return next (
+                    output,
+                    is_rls_enabled,
+                    visible_to_subscription_ids,
+                    case
+                        when error_record_exceeds_max_size then array['Error 413: Payload Too Large']
+                        else '{}'
+                    end
+                )::realtime.wal_rls;
+            end loop;
 
         end if;
     end loop;
