@@ -31,8 +31,9 @@ create table realtime.subscription (
     claims jsonb not null,
     claims_role regrole not null generated always as (realtime.to_regrole(claims ->> 'role')) stored,
     created_at timestamp not null default timezone('utc', now()),
-    action_filter text NULL DEFAULT '*'::text CHECK (action_filter IN ('*', 'INSERT', 'UPDATE', 'DELETE'))
-    unique (subscription_id, entity, filters, action_filter)
+    action_filter text NULL DEFAULT '*'::text CHECK (action_filter IN ('*', 'INSERT', 'UPDATE', 'DELETE')),
+    selected_columns text[] DEFAULT null,
+    unique (subscription_id, entity, filters, action_filter, selected_columns)
 );
 ```
 where `realtime.user_defined_filter` is
@@ -60,6 +61,12 @@ To subscribe to `INSERT`s only on a table named `public.notes` where the `id` is
 ```sql
 insert into realtime.subscription(subscription_id, entity, filters, claims, action_filter)
 values ('832bd278-dac7-4bef-96be-e21c8a0023c4', 'public.notes', array[('id', 'eq', '6')], '{"role", "authenticated"}', 'INSERT');
+```
+
+To subscribe to `public.notes` and receive only the `id` and `title` columns (plus primary keys, which are always included):
+```sql
+insert into realtime.subscription(subscription_id, entity, filters, claims, selected_columns)
+values ('832bd278-dac7-4bef-96be-e21c8a0023c4', 'public.notes', '{}', '{"role": "authenticated"}', array['id', 'title']);
 ```
 
 
