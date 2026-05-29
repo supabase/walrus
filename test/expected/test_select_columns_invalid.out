@@ -16,6 +16,6 @@ select
     ),
     array['nonexistent_column'];
 ERROR:  invalid column for select nonexistent_column
-CONTEXT:  PL/pgSQL function realtime.subscription_check_filters() line 62 at RAISE
+CONTEXT:  PL/pgSQL function realtime.subscription_check_filters() line 63 at RAISE
 drop table public.notes;
 truncate table realtime.subscription;

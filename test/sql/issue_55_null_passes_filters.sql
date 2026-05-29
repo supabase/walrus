@@ -14,7 +14,7 @@ select
         'email', 'example@example.com',
         'sub', seed_uuid(1)::text
     ),
-    array[('page_id', 'eq', '5')::realtime.user_defined_filter];
+    array[('page_id', 'eq', '5', null)::realtime.user_defined_filter];
 
 select clear_wal();
 

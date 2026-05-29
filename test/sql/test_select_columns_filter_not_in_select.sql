@@ -24,7 +24,7 @@ select
         'sub', seed_uuid(1)::text
     ),
     array['body'],
-    array[('extra', 'eq', 'match')::realtime.user_defined_filter];
+    array[('extra', 'eq', 'match', null)::realtime.user_defined_filter];
 
 -- Matching row: filter on extra matches, but extra not in output
 select clear_wal();

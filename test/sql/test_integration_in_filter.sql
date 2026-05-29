@@ -16,7 +16,7 @@ select
         'email', 'example@example.com',
         'sub', seed_uuid(id)::text
     ),
-    array[(column_name, op, value)::realtime.user_defined_filter]
+    array[(column_name, op, value, null)::realtime.user_defined_filter]
 from
     (
         values
@@ -52,7 +52,7 @@ select
         'email', 'example@example.com',
         'sub', seed_uuid(6)::text
     ),
-    array[('body', 'in', array[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1])::realtime.user_defined_filter];
+    array[('body', 'in', array[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1], null)::realtime.user_defined_filter];
 
 drop table public.notes;
 select pg_drop_replication_slot('realtime');

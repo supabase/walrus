@@ -1,138 +1,115 @@
 select realtime.check_equality_op('eq', 'text', 'aaa', 'aaa');
- check_equality_op 
--------------------
- t
-(1 row)
-
+ERROR:  function realtime.check_equality_op(unknown, unknown, unknown, unknown) is not unique
+LINE 1: select realtime.check_equality_op('eq', 'text', 'aaa', 'aaa'...
+               ^
+HINT:  Could not choose a best candidate function. You might need to add explicit type casts.
 select realtime.check_equality_op('eq', 'text', 'aaa', 'bbb');
- check_equality_op 
--------------------
- f
-(1 row)
-
+ERROR:  function realtime.check_equality_op(unknown, unknown, unknown, unknown) is not unique
+LINE 1: select realtime.check_equality_op('eq', 'text', 'aaa', 'bbb'...
+               ^
+HINT:  Could not choose a best candidate function. You might need to add explicit type casts.
 select realtime.check_equality_op('neq', 'text', 'aaa', 'aaa');
- check_equality_op 
--------------------
- f
-(1 row)
-
+ERROR:  function realtime.check_equality_op(unknown, unknown, unknown, unknown) is not unique
+LINE 1: select realtime.check_equality_op('neq', 'text', 'aaa', 'aaa...
+               ^
+HINT:  Could not choose a best candidate function. You might need to add explicit type casts.
 select realtime.check_equality_op('neq', 'text', 'aaa', 'bbb');
- check_equality_op 
--------------------
- t
-(1 row)
-
+ERROR:  function realtime.check_equality_op(unknown, unknown, unknown, unknown) is not unique
+LINE 1: select realtime.check_equality_op('neq', 'text', 'aaa', 'bbb...
+               ^
+HINT:  Could not choose a best candidate function. You might need to add explicit type casts.
 select realtime.check_equality_op('lt', 'text', 'aaa', 'bbb');
- check_equality_op 
--------------------
- t
-(1 row)
-
+ERROR:  function realtime.check_equality_op(unknown, unknown, unknown, unknown) is not unique
+LINE 1: select realtime.check_equality_op('lt', 'text', 'aaa', 'bbb'...
+               ^
+HINT:  Could not choose a best candidate function. You might need to add explicit type casts.
 select realtime.check_equality_op('lt', 'text', 'bbb', 'aaa');
- check_equality_op 
--------------------
- f
-(1 row)
-
+ERROR:  function realtime.check_equality_op(unknown, unknown, unknown, unknown) is not unique
+LINE 1: select realtime.check_equality_op('lt', 'text', 'bbb', 'aaa'...
+               ^
+HINT:  Could not choose a best candidate function. You might need to add explicit type casts.
 select realtime.check_equality_op('lt', 'text', 'bbb', 'bbb');
- check_equality_op 
--------------------
- f
-(1 row)
-
+ERROR:  function realtime.check_equality_op(unknown, unknown, unknown, unknown) is not unique
+LINE 1: select realtime.check_equality_op('lt', 'text', 'bbb', 'bbb'...
+               ^
+HINT:  Could not choose a best candidate function. You might need to add explicit type casts.
 select realtime.check_equality_op('lte', 'text', 'aaa', 'bbb');
- check_equality_op 
--------------------
- t
-(1 row)
-
+ERROR:  function realtime.check_equality_op(unknown, unknown, unknown, unknown) is not unique
+LINE 1: select realtime.check_equality_op('lte', 'text', 'aaa', 'bbb...
+               ^
+HINT:  Could not choose a best candidate function. You might need to add explicit type casts.
 select realtime.check_equality_op('lte', 'text', 'bbb', 'aaa');
- check_equality_op 
--------------------
- f
-(1 row)
-
+ERROR:  function realtime.check_equality_op(unknown, unknown, unknown, unknown) is not unique
+LINE 1: select realtime.check_equality_op('lte', 'text', 'bbb', 'aaa...
+               ^
+HINT:  Could not choose a best candidate function. You might need to add explicit type casts.
 select realtime.check_equality_op('lte', 'text', 'bbb', 'bbb');
- check_equality_op 
--------------------
- t
-(1 row)
-
+ERROR:  function realtime.check_equality_op(unknown, unknown, unknown, unknown) is not unique
+LINE 1: select realtime.check_equality_op('lte', 'text', 'bbb', 'bbb...
+               ^
+HINT:  Could not choose a best candidate function. You might need to add explicit type casts.
 select realtime.check_equality_op('gt', 'text', 'aaa', 'bbb');
- check_equality_op 
--------------------
- f
-(1 row)
-
+ERROR:  function realtime.check_equality_op(unknown, unknown, unknown, unknown) is not unique
+LINE 1: select realtime.check_equality_op('gt', 'text', 'aaa', 'bbb'...
+               ^
+HINT:  Could not choose a best candidate function. You might need to add explicit type casts.
 select realtime.check_equality_op('gt', 'text', 'bbb', 'aaa');
- check_equality_op 
--------------------
- t
-(1 row)
-
+ERROR:  function realtime.check_equality_op(unknown, unknown, unknown, unknown) is not unique
+LINE 1: select realtime.check_equality_op('gt', 'text', 'bbb', 'aaa'...
+               ^
+HINT:  Could not choose a best candidate function. You might need to add explicit type casts.
 select realtime.check_equality_op('gt', 'text', 'bbb', 'bbb');
- check_equality_op 
--------------------
- f
-(1 row)
-
+ERROR:  function realtime.check_equality_op(unknown, unknown, unknown, unknown) is not unique
+LINE 1: select realtime.check_equality_op('gt', 'text', 'bbb', 'bbb'...
+               ^
+HINT:  Could not choose a best candidate function. You might need to add explicit type casts.
 select realtime.check_equality_op('gte', 'text', 'aaa', 'bbb');
- check_equality_op 
--------------------
- f
-(1 row)
-
+ERROR:  function realtime.check_equality_op(unknown, unknown, unknown, unknown) is not unique
+LINE 1: select realtime.check_equality_op('gte', 'text', 'aaa', 'bbb...
+               ^
+HINT:  Could not choose a best candidate function. You might need to add explicit type casts.
 select realtime.check_equality_op('gte', 'text', 'bbb', 'aaa');
- check_equality_op 
--------------------
- t
-(1 row)
-
+ERROR:  function realtime.check_equality_op(unknown, unknown, unknown, unknown) is not unique
+LINE 1: select realtime.check_equality_op('gte', 'text', 'bbb', 'aaa...
+               ^
+HINT:  Could not choose a best candidate function. You might need to add explicit type casts.
 select realtime.check_equality_op('gte', 'text', 'bbb', 'bbb');
- check_equality_op 
--------------------
- t
-(1 row)
-
+ERROR:  function realtime.check_equality_op(unknown, unknown, unknown, unknown) is not unique
+LINE 1: select realtime.check_equality_op('gte', 'text', 'bbb', 'bbb...
+               ^
+HINT:  Could not choose a best candidate function. You might need to add explicit type casts.
 select realtime.check_equality_op('eq', 'bigint', '1', '1');
- check_equality_op 
--------------------
- t
-(1 row)
-
+ERROR:  function realtime.check_equality_op(unknown, unknown, unknown, unknown) is not unique
+LINE 1: select realtime.check_equality_op('eq', 'bigint', '1', '1');
+               ^
+HINT:  Could not choose a best candidate function. You might need to add explicit type casts.
 select realtime.check_equality_op('eq', 'bigint', '2', '1');
- check_equality_op 
--------------------
- f
-(1 row)
-
+ERROR:  function realtime.check_equality_op(unknown, unknown, unknown, unknown) is not unique
+LINE 1: select realtime.check_equality_op('eq', 'bigint', '2', '1');
+               ^
+HINT:  Could not choose a best candidate function. You might need to add explicit type casts.
 select realtime.check_equality_op('eq', 'bigint', '2', null);
- check_equality_op 
--------------------
- 
-(1 row)
-
+ERROR:  function realtime.check_equality_op(unknown, unknown, unknown, unknown) is not unique
+LINE 1: select realtime.check_equality_op('eq', 'bigint', '2', null)...
+               ^
+HINT:  Could not choose a best candidate function. You might need to add explicit type casts.
 select realtime.check_equality_op('eq','uuid','639f86b1-738b-43ed-bb09-c8d3f3bafa30','639f86b1-738b-43ed-bb09-c8d3f3bafa30');
- check_equality_op 
--------------------
- t
-(1 row)
-
+ERROR:  function realtime.check_equality_op(unknown, unknown, unknown, unknown) is not unique
+LINE 1: select realtime.check_equality_op('eq','uuid','639f86b1-738b...
+               ^
+HINT:  Could not choose a best candidate function. You might need to add explicit type casts.
 select realtime.check_equality_op('eq','uuid','639f86b1-738b-43ed-bb09-c8d3f3bafa30','b423f213-ac24-402a-95ea-cf1d94d8e9f0');
- check_equality_op 
--------------------
- f
-(1 row)
-
+ERROR:  function realtime.check_equality_op(unknown, unknown, unknown, unknown) is not unique
+LINE 1: select realtime.check_equality_op('eq','uuid','639f86b1-738b...
+               ^
+HINT:  Could not choose a best candidate function. You might need to add explicit type casts.
 select realtime.check_equality_op('in', 'bigint', '2', '{1,2,3}');
- check_equality_op 
--------------------
- t
-(1 row)
-
+ERROR:  function realtime.check_equality_op(unknown, unknown, unknown, unknown) is not unique
+LINE 1: select realtime.check_equality_op('in', 'bigint', '2', '{1,2...
+               ^
+HINT:  Could not choose a best candidate function. You might need to add explicit type casts.
 select realtime.check_equality_op('in', 'bigint', '4', '{1,2,3}');
- check_equality_op 
--------------------
- f
-(1 row)
-
+ERROR:  function realtime.check_equality_op(unknown, unknown, unknown, unknown) is not unique
+LINE 1: select realtime.check_equality_op('in', 'bigint', '4', '{1,2...
+               ^
+HINT:  Could not choose a best candidate function. You might need to add explicit type casts.

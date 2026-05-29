@@ -14,7 +14,7 @@ select
         'email', 'example@example.com',
         'sub', seed_uuid(id)::text
     ),
-    array[(column_name, op, value)::realtime.user_defined_filter]
+    array[(column_name, op, value, null)::realtime.user_defined_filter]
 from
     (
         values
