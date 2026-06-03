@@ -105,7 +105,7 @@ select
     ),
     array[('body', 'in', array[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1])::realtime.user_defined_filter];
 ERROR:  too many values for `in` filter. Maximum 100
-CONTEXT:  PL/pgSQL function realtime.subscription_check_filters() line 50 at RAISE
+CONTEXT:  PL/pgSQL function realtime.subscription_check_filters() line 41 at RAISE
 drop table public.notes;
 select pg_drop_replication_slot('realtime');
  pg_drop_replication_slot 

@@ -1,5 +1,5 @@
 /*
-Tests that subscribing with a nonexistent column in selected_columns raises an exception
+Tests that subscribing with an empty selected_columns raises an exception
 */
 create table public.notes(
     id int primary key,
@@ -14,8 +14,8 @@ select
         'email', 'example@example.com',
         'sub', seed_uuid(1)::text
     ),
-    array['nonexistent_column'];
-ERROR:  invalid column for select nonexistent_column
-CONTEXT:  PL/pgSQL function realtime.subscription_check_filters() line 64 at RAISE
+    '{}'::text[];
+ERROR:  selected_columns cannot be empty. Remove the select parameter to capture all columns.
+CONTEXT:  PL/pgSQL function realtime.subscription_check_filters() line 52 at RAISE
 drop table public.notes;
 truncate table realtime.subscription;

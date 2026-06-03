@@ -69,6 +69,11 @@ insert into realtime.subscription(subscription_id, entity, filters, claims, sele
 values ('832bd278-dac7-4bef-96be-e21c8a0023c4', 'public.notes', '{}', '{"role": "authenticated"}', array['id', 'title']);
 ```
 
+`selected_columns` behaviour:
+- `NULL` (default) — all columns are returned
+- `array['col1', 'col2']` — only the listed columns are returned (plus primary keys)
+- `'{}'` (empty array) — raises an error; use `NULL` to capture all columns
+
 
 ### Reading WAL
 
