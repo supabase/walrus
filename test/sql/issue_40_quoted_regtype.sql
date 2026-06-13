@@ -29,7 +29,7 @@ select
         'role', 'authenticated',
         'sub', seed_uuid(2)::text
     ),
-    array[('primary_color', 'eq', 'RED')::realtime.user_defined_filter];
+    array[('primary_color', 'eq', 'RED', null)::realtime.user_defined_filter];
 
 insert into public.notes(id, primary_color)
 values

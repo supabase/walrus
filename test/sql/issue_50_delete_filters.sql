@@ -14,7 +14,7 @@ select
         'email', 'example@example.com',
         'sub', seed_uuid(id)::text
     ),
-    array[(column_name, op, value)::realtime.user_defined_filter]
+    array[(column_name, op, value, null)::realtime.user_defined_filter]
 from
     (
         values
@@ -63,6 +63,45 @@ select clear_wal();
 
 delete from public.notes;
 
+
+select
+    rec,
+    is_rls_enabled,
+    subscription_ids,
+    errors
+from
+   walrus;
+
+
+----------------------------------------------------------------------------------------
+-- Multi-filter: missing column must not allow subscription to pass                  --
+----------------------------------------------------------------------------------------
+
+alter table public.notes replica identity default;
+
+truncate table realtime.subscription;
+
+insert into realtime.subscription(subscription_id, entity, claims, filters)
+select
+    seed_uuid(3),
+    'public.notes',
+    jsonb_build_object(
+        'role', 'authenticated',
+        'email', 'example@example.com',
+        'sub', seed_uuid(3)::text
+    ),
+    array[
+        ('id',   'eq', '1', null)::realtime.user_defined_filter,
+        ('body', 'eq', 'bbb', null)::realtime.user_defined_filter
+    ];
+
+insert into public.notes(id, body) values (1, 'bbb');
+
+select clear_wal();
+
+-- Non-full replica identity DELETE: only PK in WAL, body filter cannot be evaluated
+-- Expect 0 subscriptions: body='bbb' filter is unverifiable, must fail closed
+delete from public.notes;
 
 select
     rec,
