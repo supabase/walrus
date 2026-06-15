@@ -19,8 +19,7 @@ select
     array[(
         'identifier',
         'in',
-        '{ace23052-568e-4951-acc8-fd510ec667f9,7057e8c3-c05f-4944-b9d9-05f8c45393d1}',
-        null
+        '{ace23052-568e-4951-acc8-fd510ec667f9,7057e8c3-c05f-4944-b9d9-05f8c45393d1}'
     )::realtime.user_defined_filter];
 
 

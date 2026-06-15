@@ -16,6 +16,6 @@ select
     ),
     array[null]::text[];
 ERROR:  selected_columns cannot contain null values.
-CONTEXT:  PL/pgSQL function realtime.subscription_check_filters() line 72 at RAISE
+CONTEXT:  PL/pgSQL function realtime.subscription_check_filters() line 135 at RAISE
 drop table public.notes;
 truncate table realtime.subscription;
