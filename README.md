@@ -41,26 +41,28 @@ where `realtime.user_defined_filter` is
 create type realtime.user_defined_filter as (
     column_name text,
     op realtime.equality_op,
-    value text
+    value text,
+    negate boolean
 );
 ```
 and `realtime.equality_op`s are a subset of [postgrest ops](https://postgrest.org/en/v4.1/api.html#horizontal-filtering-rows). Specifically:
 ```sql
 create type realtime.equality_op as enum(
-    'eq', 'neq', 'lt', 'lte', 'gt', 'gte', 'in'
+    'eq', 'neq', 'lt', 'lte', 'gt', 'gte', 'in',
+    'like', 'ilike', 'is', 'match', 'imatch', 'isdistinct'
 );
 ```
 
 For example, to subscribe to a table named `public.notes` where the `id` is `6` as the `authenticated` role:
 ```sql
 insert into realtime.subscription(subscription_id, entity, filters, claims)
-values ('832bd278-dac7-4bef-96be-e21c8a0023c4', 'public.notes', array[('id', 'eq', '6')], '{"role", "authenticated"}');
+values ('832bd278-dac7-4bef-96be-e21c8a0023c4', 'public.notes', array[('id', 'eq', '6', false)::realtime.user_defined_filter], '{"role", "authenticated"}');
 ```
 
 To subscribe to `INSERT`s only on a table named `public.notes` where the `id` is `6` as the `authenticated` role:
 ```sql
 insert into realtime.subscription(subscription_id, entity, filters, claims, action_filter)
-values ('832bd278-dac7-4bef-96be-e21c8a0023c4', 'public.notes', array[('id', 'eq', '6')], '{"role", "authenticated"}', 'INSERT');
+values ('832bd278-dac7-4bef-96be-e21c8a0023c4', 'public.notes', array[('id', 'eq', '6', false)::realtime.user_defined_filter], '{"role", "authenticated"}', 'INSERT');
 ```
 
 To subscribe to `public.notes` and receive only the `id` and `title` columns (plus primary keys, which are always included):
