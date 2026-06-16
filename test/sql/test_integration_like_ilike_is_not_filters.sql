@@ -1,0 +1,149 @@
+create table public.notes(
+    id int primary key,
+    body text,
+    nullable_body text
+);
+
+-- ── Expand/contract: legacy `filters` and new `filters_v2` coexist ──
+
+-- Old writers keep inserting 3-field legacy filters successfully (filters_v2
+-- defaults to '{}').
+insert into realtime.subscription(subscription_id, entity, claims, filters)
+values (
+    '00000000-0000-0000-0000-000000000001',
+    'public.notes',
+    jsonb_build_object('role', 'authenticated', 'email', 'a@example.com', 'sub', '00000000-0000-0000-0000-000000000001'),
+    array[('id', 'eq', '6')]::realtime.user_defined_filter[]
+);
+
+-- New writers insert v2 filters (with negate) into filters_v2.
+insert into realtime.subscription(subscription_id, entity, claims, filters_v2)
+values (
+    '00000000-0000-0000-0000-000000000002',
+    'public.notes',
+    jsonb_build_object('role', 'authenticated', 'email', 'a@example.com', 'sub', '00000000-0000-0000-0000-000000000002'),
+    array[
+        ('body', 'ilike', '%world%', false),
+        ('body', 'like',  '%x%',     true)
+    ]::realtime.user_defined_filter_v2[]
+);
+
+-- filters_v2 is normalized (sorted by column_name, op, value, negate).
+select filters, filters_v2 from realtime.subscription order by subscription_id;
+
+-- The new operators are rejected on the LEGACY filters column (they can only be
+-- evaluated on filters_v2; otherwise apply_rls would hit the UNKNOWN OP path).
+insert into realtime.subscription(subscription_id, entity, claims, filters)
+values (
+    '00000000-0000-0000-0000-000000000003',
+    'public.notes',
+    jsonb_build_object('role', 'authenticated', 'email', 'a@example.com', 'sub', '00000000-0000-0000-0000-000000000003'),
+    array[('body', 'like', '%x%')]::realtime.user_defined_filter[]
+);
+
+-- `is` with an invalid keyword value is rejected at subscription time.
+insert into realtime.subscription(subscription_id, entity, claims, filters_v2)
+values (
+    '00000000-0000-0000-0000-000000000004',
+    'public.notes',
+    jsonb_build_object('role', 'authenticated', 'email', 'a@example.com', 'sub', '00000000-0000-0000-0000-000000000004'),
+    array[('body', 'is', 'maybe', false)]::realtime.user_defined_filter_v2[]
+);
+
+-- like/ilike on a non-text column is rejected at subscription time.
+insert into realtime.subscription(subscription_id, entity, claims, filters_v2)
+values (
+    '00000000-0000-0000-0000-000000000005',
+    'public.notes',
+    jsonb_build_object('role', 'authenticated', 'email', 'a@example.com', 'sub', '00000000-0000-0000-0000-000000000005'),
+    array[('id', 'like', '%5%', false)]::realtime.user_defined_filter_v2[]
+);
+
+-- An invalid regex is rejected at subscription time.
+insert into realtime.subscription(subscription_id, entity, claims, filters_v2)
+values (
+    '00000000-0000-0000-0000-000000000006',
+    'public.notes',
+    jsonb_build_object('role', 'authenticated', 'email', 'a@example.com', 'sub', '00000000-0000-0000-0000-000000000006'),
+    array[('body', 'match', '(unclosed', false)]::realtime.user_defined_filter_v2[]
+);
+
+-- match/imatch on a non-text column is rejected at subscription time (the regex
+-- operator has no overload for the column type, which would abort apply_rls).
+insert into realtime.subscription(subscription_id, entity, claims, filters_v2)
+values (
+    '00000000-0000-0000-0000-000000000007',
+    'public.notes',
+    jsonb_build_object('role', 'authenticated', 'email', 'a@example.com', 'sub', '00000000-0000-0000-0000-000000000007'),
+    array[('id', 'match', 'foo.*', false)]::realtime.user_defined_filter_v2[]
+);
+
+-- `is true` on a non-boolean column is rejected at subscription time (only
+-- `is null` is type-agnostic).
+insert into realtime.subscription(subscription_id, entity, claims, filters_v2)
+values (
+    '00000000-0000-0000-0000-000000000008',
+    'public.notes',
+    jsonb_build_object('role', 'authenticated', 'email', 'a@example.com', 'sub', '00000000-0000-0000-0000-000000000008'),
+    array[('body', 'is', 'true', false)]::realtime.user_defined_filter_v2[]
+);
+
+-- ── Evaluation path (realtime.is_visible_through_filters over v2 filters) ──
+-- A row equivalent to public.notes(id=1, body='hello world', nullable_body=null).
+
+-- like: matches                                       → visible (true)
+select realtime.is_visible_through_filters(
+    array[('body', 'text', null, '"hello world"'::jsonb, false, true)]::realtime.wal_column[],
+    array[('body', 'like', '%world%', false)]::realtime.user_defined_filter_v2[]
+);
+
+-- ilike: case-insensitive match                       → visible (true)
+select realtime.is_visible_through_filters(
+    array[('body', 'text', null, '"hello world"'::jsonb, false, true)]::realtime.wal_column[],
+    array[('body', 'ilike', '%WORLD%', false)]::realtime.user_defined_filter_v2[]
+);
+
+-- NOT LIKE: row matches pattern                        → not visible (false)
+select realtime.is_visible_through_filters(
+    array[('body', 'text', null, '"hello world"'::jsonb, false, true)]::realtime.wal_column[],
+    array[('body', 'like', '%world%', true)]::realtime.user_defined_filter_v2[]
+);
+
+-- NOT IN: value inside the list                        → not visible (false)
+select realtime.is_visible_through_filters(
+    array[('body', 'text', null, '"hello world"'::jsonb, false, true)]::realtime.wal_column[],
+    array[('body', 'in', '{hello world,other}', true)]::realtime.user_defined_filter_v2[]
+);
+
+-- is null on a null column                            → visible (true)
+select realtime.is_visible_through_filters(
+    array[('nullable_body', 'text', null, 'null'::jsonb, false, true)]::realtime.wal_column[],
+    array[('nullable_body', 'is', 'null', false)]::realtime.user_defined_filter_v2[]
+);
+
+-- is not null on a null column                        → not visible (false)
+select realtime.is_visible_through_filters(
+    array[('nullable_body', 'text', null, 'null'::jsonb, false, true)]::realtime.wal_column[],
+    array[('nullable_body', 'is', 'null', true)]::realtime.user_defined_filter_v2[]
+);
+
+-- isdistinct vs a different value                     → visible (true)
+select realtime.is_visible_through_filters(
+    array[('body', 'text', null, '"hello world"'::jsonb, false, true)]::realtime.wal_column[],
+    array[('body', 'isdistinct', 'other', false)]::realtime.user_defined_filter_v2[]
+);
+
+-- Fail closed: filter references a column absent from the WAL payload → not visible (false)
+select realtime.is_visible_through_filters(
+    array[('body', 'text', null, '"hello world"'::jsonb, false, true)]::realtime.wal_column[],
+    array[('missing', 'eq', 'x', false)]::realtime.user_defined_filter_v2[]
+);
+
+-- No filters                                           → visible (true)
+select realtime.is_visible_through_filters(
+    array[('body', 'text', null, '"hello world"'::jsonb, false, true)]::realtime.wal_column[],
+    '{}'::realtime.user_defined_filter_v2[]
+);
+
+truncate table realtime.subscription;
+drop table public.notes;

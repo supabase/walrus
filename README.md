@@ -47,7 +47,8 @@ create type realtime.user_defined_filter as (
 and `realtime.equality_op`s are a subset of [postgrest ops](https://postgrest.org/en/v4.1/api.html#horizontal-filtering-rows). Specifically:
 ```sql
 create type realtime.equality_op as enum(
-    'eq', 'neq', 'lt', 'lte', 'gt', 'gte', 'in'
+    'eq', 'neq', 'lt', 'lte', 'gt', 'gte', 'in',
+    'like', 'ilike', 'is', 'match', 'imatch', 'isdistinct'
 );
 ```
 
@@ -56,6 +57,42 @@ For example, to subscribe to a table named `public.notes` where the `id` is `6` 
 insert into realtime.subscription(subscription_id, entity, filters, claims)
 values ('832bd278-dac7-4bef-96be-e21c8a0023c4', 'public.notes', array[('id', 'eq', '6')], '{"role", "authenticated"}');
 ```
+
+### Extended operators and negation (`filters_v2`)
+
+The operators `like`, `ilike`, `is`, `match` (`~`), `imatch` (`~*`) and `isdistinct`,
+along with negation of any operator, are stored on a separate `filters_v2`
+column whose composite type carries an extra `negate` boolean:
+```sql
+create type realtime.user_defined_filter_v2 as (
+    column_name text,
+    op realtime.equality_op,
+    value text,
+    negate boolean
+);
+```
+This is an expand/contract rollout: the legacy 3-field `filters` column is left
+untouched (so older Realtime server instances keep writing to it during a rolling
+deploy), and the new operators are only accepted on `filters_v2`. `apply_rls`
+evaluates both columns; for any given subscription one of them is always empty.
+
+When `negate` is `true` the operator's result is inverted (e.g. `like` →
+`NOT LIKE`, `in` → `NOT IN`). To subscribe to `public.notes` where `body` does
+**not** match the pattern `%draft%`:
+```sql
+insert into realtime.subscription(subscription_id, entity, filters_v2, claims)
+values (
+    '832bd278-dac7-4bef-96be-e21c8a0023c4',
+    'public.notes',
+    array[('body', 'like', '%draft%', true)]::realtime.user_defined_filter_v2[],
+    '{"role": "authenticated"}'
+);
+```
+
+Operator notes:
+- `is` requires a keyword value: `null`, `true`, `false` or `unknown`. `is true`/`false`/`unknown` are only valid on boolean columns; `is null` works on any type.
+- `like`/`ilike`/`match`/`imatch` require a text-compatible column type.
+- `match`/`imatch` patterns are validated as regular expressions when the subscription is created.
 
 To subscribe to `INSERT`s only on a table named `public.notes` where the `id` is `6` as the `authenticated` role:
 ```sql

@@ -16,6 +16,6 @@ select
     ),
     '{}'::text[];
 ERROR:  selected_columns cannot be empty. Remove the select parameter to capture all columns.
-CONTEXT:  PL/pgSQL function realtime.subscription_check_filters() line 52 at RAISE
+CONTEXT:  PL/pgSQL function realtime.subscription_check_filters() line 130 at RAISE
 drop table public.notes;
 truncate table realtime.subscription;
