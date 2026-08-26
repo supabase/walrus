@@ -109,7 +109,7 @@ values ('832bd278-dac7-4bef-96be-e21c8a0023c4', 'public.notes', '{}', '{"role": 
 `selected_columns` behaviour:
 - `NULL` (default) — all columns are returned
 - `array['col1', 'col2']` — only the listed columns are returned (plus primary keys)
-- `'{}'` (empty array) — raises an error; use `NULL` to capture all columns
+- `'{}'` (empty array) — only the primary key columns are returned; use `NULL` to capture all columns
 
 
 ### Reading WAL
