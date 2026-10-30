@@ -55,7 +55,7 @@ create type realtime.equality_op as enum(
 For example, to subscribe to a table named `public.notes` where the `id` is `6` as the `authenticated` role:
 ```sql
 insert into realtime.subscription(subscription_id, entity, filters, claims)
-values ('832bd278-dac7-4bef-96be-e21c8a0023c4', 'public.notes', array[('id', 'eq', '6')], '{"role", "authenticated"}');
+values ('832bd278-dac7-4bef-96be-e21c8a0023c4', 'public.notes', array[('id', 'eq', '6')]::realtime.user_defined_filter[], '{"role": "authenticated"}');
 ```
 
 ### Extended operators and negation (`filters_v2`)
@@ -97,7 +97,7 @@ Operator notes:
 To subscribe to `INSERT`s only on a table named `public.notes` where the `id` is `6` as the `authenticated` role:
 ```sql
 insert into realtime.subscription(subscription_id, entity, filters, claims, action_filter)
-values ('832bd278-dac7-4bef-96be-e21c8a0023c4', 'public.notes', array[('id', 'eq', '6')], '{"role", "authenticated"}', 'INSERT');
+values ('832bd278-dac7-4bef-96be-e21c8a0023c4', 'public.notes', array[('id', 'eq', '6')]::realtime.user_defined_filter[], '{"role": "authenticated"}', 'INSERT');
 ```
 
 To subscribe to `public.notes` and receive only the `id` and `title` columns (plus primary keys, which are always included):
@@ -309,7 +309,7 @@ from
             x.subscription_ids,
             x.errors
         from
-            realtime.apply_rls(data::jsonb) x(wal, is_rls_enabled, subcription_ids, errors)
+            realtime.apply_rls(data::jsonb) x(wal, is_rls_enabled, subscription_ids, errors)
     ) xyz
 where
     xyz.subscription_ids[1] is not null
@@ -328,7 +328,7 @@ with pub as (
         ) as w2j_actions,
         coalesce(
             string_agg(
-                realtime.quote_wal2json(format('%I.%I', schemaname, tablename)::regclass),
+                realtime.quote_wal2json(format('%s.%s', schemaname, tablename)::regclass),
                 ','
             ) filter (where ppt.tablename is not null and ppt.tablename not like '% %'),
             ''
@@ -384,7 +384,50 @@ where
 
 Ex:
 ```sql
-realtime.apply_rls(wal := w2j.data::jsonb, max_record_bytes := 1024*1024) x(wal, is_rls_enabled, subscription_ids, errors)
+with pub as (
+    select
+        concat_ws(
+            ',',
+            case when bool_or(pubinsert) then 'insert' else null end,
+            case when bool_or(pubupdate) then 'update' else null end,
+            case when bool_or(pubdelete) then 'delete' else null end
+        ) as w2j_actions,
+        coalesce(
+            string_agg(
+                realtime.quote_wal2json(format('%s.%s', schemaname, tablename)::regclass),
+                ','
+            ) filter (where ppt.tablename is not null and ppt.tablename not like '% %'),
+            ''
+        ) w2j_add_tables
+    from
+        pg_publication pp
+        left join pg_publication_tables ppt
+            on pp.pubname = ppt.pubname
+    where
+        pp.pubname = 'supabase_realtime'
+    group by
+        pp.pubname
+    limit 1
+),
+w2j as (
+    select
+        x.*, pub.w2j_add_tables
+    from
+         pub,
+         pg_logical_slot_get_changes(
+            'realtime', null, null,
+            'include-pk', '1',
+            'include-transaction', 'false',
+            'include-type-oids', 'true',
+            'include-timestamp', 'true',
+            'write-in-chunks', 'true',
+            'format-version', '2',
+            'actions', pub.w2j_actions,
+            'add-tables', pub.w2j_add_tables
+        ) x
+)
+SELECT realtime.apply_rls(wal := w2j.data::jsonb, max_record_bytes := 1024*1024)
+FROM w2j
 ```
 
 
